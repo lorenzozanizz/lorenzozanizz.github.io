@@ -3,11 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Your Name</title>
-  <meta name="description" content="Small notes on my projects and things I learned.">
+  <meta name="description" content="Short notes on projects, technical problems, and things learned.">
+  <title>Blog</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Your Name</h1>
-  <p>Small notes on projects and things I learned.</p>
+  <div class="site">
+    <header class="site-header">
+      <h1>Blog</h1>
+      <p>Notes on projects, technical problems, and things learned.</p>
+    </header>
+
+    <main>
+      <h2 class="section-title">Articles</h2>
+      <div class="article-list">
+        <!-- ARTICLE -->
+        <article class="article-card">
+          <a class="article-image" href="articles/first-post.html" aria-label="Read First post">
+            <img src="articles/resources/depth_sensor/thumbnail.png" alt="Rigged Mixamo model" width="320" height="200">
+          </a>
+          <div class="article-content">
+            <time datetime="2026-09-29">18 August 2026</time>
+            <h3><a href="articles/depth_sensor.html">Modelling a depth sensor from a Blender scene</a></h3>
+            <p>How we tackled UHK's Multimodal Action Recognition competition with synthetic generations f</p>
+            <a class="read-link" href="articles/depth_sensor.html">Read article →</a>
+          </div>
+        </article>
+        <!-- END ARTICLE -->
+      </div>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
 </body>
 </html>

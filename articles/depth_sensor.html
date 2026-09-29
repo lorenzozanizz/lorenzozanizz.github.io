@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Exploring how a Blender depth pass can be made to resemble the imperfect frames of a depth camera.">
+  <title>Modelling a depth sensor from a Blender scene · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; max-width: 640px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+    .image-placeholder { box-sizing: border-box; display: grid; place-items: center; max-width: 640px; min-height: 280px; padding: 2rem; border: 1px dashed currentColor; text-align: center; opacity: .7; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">18 August 2026</time>
+        <h1>Modelling a depth sensor from a Blender scene</h1>
+        <p>A Blender depth pass is almost suspiciously tidy. Every visible surface arrives with a precise distance, while a real depth image tends to have a usable range, uncertain silhouettes, and places where no measurement survives. I wanted to see how far a few small, explicit changes could take a rendered frame toward the depth images used for action recognition.</p>
+
+        <h2>A room, a person, and a depth pass</h2>
+        <p>The scene was assembled in Blender around the <a href="https://sketchfab.com/3d-models/white-modern-living-room-afb8cb0cbee1488caf61471ef14041e9">White Modern Living Room on Sketchfab</a>. The human model came from <a href="https://www.mixamo.com/">Adobe Mixamo</a>. A camera looking into the room gives us a fixed view of the action, and Blender’s compositing output provides a depth value for each pixel.</p>
+        <figure>
+
+          <div style="display: flex; gap: 1rem;">
+            <img src="resources/depth_sensor/blender_scene.png" alt="Real depth sensor" style="width: 50%; min-width: 0;">
+            <img src="resources/depth_sensor/raw_depth.png" alt="Modelled depth sensor" style="width: 50%; min-width: 0;">
+          </div>
+          <figcaption>White Modern Living Room - Licensed reproduction from Sketchfab</figcaption>
+        </figure>
+
+
+
+        <p>The motivation was the CUHK-X action recognition challenge. In this setting, a model needs to recognize an action from depth imagery over time: each frame encodes distance rather than the room’s ordinary colors and textures. Synthetic motion can provide controlled examples, but the perfectly clean depth from a renderer looks different from the incomplete frames a depth sensor produces. The experiment here is about that gap in appearance, not a claim that the result reproduces the challenge sensor exactly.</p>
+
+        <h2>Starting from the EXR</h2>
+        <p>The supplied frame is a 640 × 480 OpenEXR with a single <code>Image.V</code> channel. Reading it as float32 preserves the scene distances. The values in this particular frame span roughly 4.46 to 10.05; the script chooses 3.0 to 8.5 as its working range. Anything beyond it will eventually become black.</p>
+        <pre class="language-python"><code class="language-python">exr = OpenEXR.InputFile("0001.exr")
+dw = exr.header()["dataWindow"]
+width = dw.max.x - dw.min.x + 1
+height = dw.max.y - dw.min.y + 1
+raw = exr.channel("Image.V", Imath.PixelType(Imath.PixelType.FLOAT))
+depth = np.frombuffer(raw, dtype=np.float32).reshape(height, width)
+valid = np.isfinite(depth) & (depth >= 3.0) & (depth <= 8.5)</code></pre>
+        <figure><img src="resources/depth_sensor/clean-depth.png" alt="Clean range-limited depth frame with a person in the room" width="640" height="480"><figcaption>The Blender depth, mapped to a color palette for viewing. Black is outside the selected range.</figcaption></figure>
+        <p>The colors are only a display choice. The interesting part is the underlying distance field: it tells us where a person separates from the room, and where that separation might become less certain in a measured image.</p>
+
+        <h2>Where silhouettes get untidy</h2>
+        <p>At a sharp change in depth, neighboring pixels may belong to very different surfaces. The script detects these jumps using horizontal and vertical differences, then finds a small band around each edge. A distance transform lets every pixel in that band inherit the strength and direction of its nearest discontinuity.</p>
+        <pre class="language-python"><code class="language-python">gx[:, :-1] = depth[:, 1:] - depth[:, :-1]
+gy[:-1, :] = depth[1:, :] - depth[:-1, :]
+gradient = np.sqrt(gx**2 + gy**2)
+edge_mask = (gradient > 0.10) & np.isfinite(depth) & (depth > 0)
+distance, (iy, ix) = ndimage.distance_transform_edt(
+    ~edge_mask, return_indices=True
+)</code></pre>
+        <p>From there, the model mixes a smooth random field with a finer one. The first can move a border coherently; the second roughens it. The width and strength grow with the depth jump. Sampling a displaced position across the edge would give a narrow, irregular transition instead of a perfectly cut-out figure.</p>
+        <p>There is a revealing detail in the current version of the script: it sets the whole selected band to <code>250</code>. Since 250 lies well beyond the 8.5 limit, those pixels become black. The computed displaced-depth blend on the following lines is never assigned. Here is the actual output from that code:</p>
+        <figure><img src="resources/depth_sensor/boundary-effect.png" alt="Depth frame with black gaps along detected boundaries" width="640" height="480"><figcaption>The boundary effect as the supplied code currently renders it: missing pixels around the silhouettes.</figcaption></figure>
+        <p>If the intention is to retain jittered depth instead of a missing-pixel band, that assignment can be replaced with the blend the function already calculates:</p>
+        <pre class="language-python"><code class="language-python">corrupted[border_mask] = (
+    (1 - blend_weight[border_mask]) * depth[border_mask]
+    + blend_weight[border_mask] * sampled[border_mask]
+)</code></pre>
+
+        <h2>At the far edge of the range</h2>
+        <p>The second disturbance deals with the far limit. Rather than dropping arbitrary pixels everywhere, the script looks near a cutoff of 8.4 and follows regions that remain continuous in depth. Four-connected components stop the candidate area from freely crossing a large object boundary. Within the eligible area, a few sampled points grow into small invalid islands; the final clipping step keeps them on the far side of the cutoff.</p>
+        <p>On this frame, the fixed random seed removes 5,073 pixels that were initially in range. Some of those overlap the missing band from the earlier operation. That is a modest way of making the range limit less like a perfectly drawn contour.</p>
+        <figure><img src="resources/depth_sensor/depth-with-dropout.png" alt="Depth frame after boundary gaps and far-range dropout" width="640" height="480"><figcaption>The two disturbances together, before the separate overlay is added.</figcaption></figure>
+
+        <h2>Making the frame visible</h2>
+        <p>The last stage maps valid distances linearly from 3.0–8.5 into Matplotlib’s <code>jet</code> palette and paints invalid pixels black. The original script then alpha-composites a transparent <code>sensor_disturbance.png</code> over the result. That overlay was not included with the sample, so the images above stop immediately before it.</p>
+        <pre class="language-python"><code class="language-python">normalized = np.zeros_like(depth, dtype=np.float32)
+normalized[valid] = (depth[valid] - 3.0) / (8.5 - 3.0)
+rgb = (colormaps["jet"](normalized)[..., :3] * 255).astype(np.uint8)
+rgb[~valid] = 0
+
+base = Image.fromarray(rgb).convert("RGBA")
+overlay = Image.open("sensor_disturbance.png").convert("RGBA")
+result = Image.alpha_composite(base, overlay)</code></pre>
+        <p>A single frame makes the spatial effects easy to inspect. In a sequence, the random seed changes for each frame, so the disturbance will not necessarily move smoothly over time. The model is useful precisely because each effect can be changed on its own: range, edge width, displacement, and dropout can all be tuned without changing the Blender animation.</p>
+      
+        <p> All that's left now is extract the camera lens border disturbance and paste it over synthetically generated frames. We will pack the full Mixamo squat animation into a GIF and compare it with a real footage available on the CUHK-X Action Recognition challenge dataset </p>
+      <div style="display: flex; gap: 1rem;">
+      <img src="resources/depth_sensor/real.gif" alt="Real depth sensor" style="width: 50%; min-width: 0;">
+      <img src="resources/depth_sensor/modelled.gif" alt="Modelled depth sensor" style="width: 50%; min-width: 0;">
+      </div>
+      <p> We can see that the sensor model is properly reproducing the lens border distortion and the JET color pallette specified by the CUHK-X dataset. 
+        The noisy effect in the glass panel in our synthetic simulation is expected, as mirrors and reflective surfaces can cause disturbances in depth sensors and multiple recordings in the original dataset exhibit this behaviour.  </p>
+      
+      <section class="references" aria-labelledby="references-title">
+        <h2 id="references-title">References</h2>
+        <ol>
+          <li id="ref-1">
+            <a href="https://www.mixamo.com/#/" target="_blank" rel="noopener noreferrer">
+              Adobe Mixamo - Squatting animation and rigged model
+            </a>
+          </li>
+        </ol>
+        <ol>
+          <li id="ref-1">
+            <a href="https://sketchfab.com/3d-models/white-modern-living-room-afb8cb0cbee1488caf61471ef14041e9" target="_blank" rel="noopener noreferrer">
+              Sketchfab - CC Attribution Living room model for the scene
+            </a>
+          </li>
+        </ol>
+
+        <ol>
+          <li id="ref-1">
+            <a href="https://www.kaggle.com/competitions/cuhk-x-competition-small-model-track/overview" target="_blank" rel="noopener noreferrer">
+              CUHK-X Competition Small Model Track
+            </a>
+          </li>
+        </ol>
+      </section>
+
+      </article>
+    </main>
+
+
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-python.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>
