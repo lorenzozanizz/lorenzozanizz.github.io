@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="My notes on ITACPC 2024: five tasks I found especially interesting, from pancake rotations to a lost permutation.">
+  <title>ITACPC 2024: five tasks I really enjoyed · Blog</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">29 September 2026</time>
+        <h1>ITACPC 2024: five tasks I really enjoyed</h1>
+
+        <p>
+          I took part in ITACPC 2024, an online programming contest held on 19 October 2024. There were twelve tasks,
+          with stories about frogs, ferrets, pancakes and cornetti. The full list is on the
+          <a href="https://itacpc.it/competition/tasks/2024" target="_blank" rel="noopener noreferrer">official task page</a>.
+          I cannot write about all of them, so here are the five I found most interesting, in no strict order.
+        </p>
+
+        <h2>1. Pancake Rotation Challenge</h2>
+
+        <p>
+          Marcella drops a pile of pancakes, and the only move allowed is rotating three consecutive pancakes to the left
+          or to the right. The question is whether the pile can be sorted. This was my favourite, because the answer is
+          short but you have to see it first.
+        </p>
+
+        <p>
+          A rotation of three elements is a 3-cycle, and a 3-cycle is an even permutation. So a rotation can never change
+          the parity of the arrangement. If all sizes are different, the answer is YES exactly when the permutation that
+          sorts the list is even. If two pancakes have the same size (the limits allow this), you can swap them without
+          changing anything visible, so any list with at least three pancakes and a repeated size is always sortable.
+          Lists of size one or two need a separate check, since no rotation fits.
+        </p>
+
+        <pre><code class="language-python">def solve(s):
+    n = len(s)
+    if n &lt;= 2:
+        return s == sorted(s)
+    if len(set(s)) &lt; n:
+        return True
+    order = sorted(range(n), key=lambda i: s[i])
+    seen = [False] * n
+    cycles = 0
+    for i in range(n):
+        if not seen[i]:
+            cycles += 1
+            while not seen[i]:
+                seen[i] = True
+                i = order[i]
+    return (n - cycles) % 2 == 0</code></pre>
+
+        <p>
+          I like this kind of task because the code is tiny. All the work happens in the head, and the edge cases
+          (duplicates and very short lists) are where a hasty solution fails.
+        </p>
+
+        <h2>2. Fast Ferret Transform</h2>
+
+        <p>
+          Ferris wants to turn the concatenation of a list of numbers into the concatenation of the same list with every
+          number increased by one, using as few digit insertions and deletions as possible. With only insertions and
+          deletions, the answer is the length of the first string plus the length of the second, minus twice their longest
+          common subsequence.
+        </p>
+
+        <p>
+          The trap is the size. The strings can have 10<sup>5</sup> digits in total, so the usual quadratic LCS is far
+          too slow. The way out is to look at what "add one" really does: the trailing 9s of a number become 0s, the digit
+          before them grows by one, and an all-9 number gains a leading 1. Everything else stays the same, so the two
+          strings are almost equal, and that structure is what you have to exploit. A problem that looks like a generic
+          string exercise turns into a careful case analysis, which I enjoyed a lot.
+        </p>
+
+        <h2>3. Quantum Frog</h2>
+
+        <p>
+          A frog particle sits in a state (i, j), two energy levels at once. In one jump it moves only one of the two
+          coordinates, and the value |a<sub>i</sub> − a<sub>j</sub>| must strictly increase. We must count how many
+          distinct states can be reached, with (i, j) and (j, i) being the same state, and N goes up to 500000.
+        </p>
+
+        <p>
+          The first instinct is to say that every state with a larger difference is reachable. The second sample
+          shows that this is false: a state with a bigger entropy can still be out of reach. So you need to
+          understand which chains of jumps exist, and you need to do it in roughly linear time after sorting the values.
+          I liked that the statement gives you the counterexample you need to avoid a wrong idea.
+        </p>
+
+        <h2>4. ITACPC Sabotage!</h2>
+
+        <p>
+          This one is the hardest of my list, and the story is fun: you are a hacker who wants to infect at least one
+          node in every cluster of the contest network, without entering the same node, the same cluster or the network
+          twice. Clusters only connect to neighbouring clusters, and the answer counts distinct sets of infected nodes,
+          not paths.
+        </p>
+
+        <p>
+          Some structure appears quickly. Because you enter each cluster only once and links only join adjacent clusters,
+          the virus has to sweep through the clusters in order, from the first to the last or the other way round. Inside
+          a cluster, the staff disabled links until only as many remain as there are nodes, so each cluster is connected
+          and contains exactly one cycle. The difficult part is counting sets instead of paths, because different routes
+          and the two sweep directions can produce the same set. It is a nice mix of graph structure and counting modulo
+          10<sup>9</sup> + 7.
+        </p>
+
+        <h2>5. Desperate Recovery</h2>
+
+        <p>
+          Sara had a permutation and M tokens, each one saying that one element is smaller than a second one, which is
+          smaller than a third. After an accident, she cannot tell the orientation of any token, since (x, y, z) could
+          mean x &lt; y &lt; z or z &lt; y &lt; x. We only need to output any permutation that satisfies at least half of
+          the tokens, rounded up.
+        </p>
+
+        <p>
+          What I found interesting is the change of goal. Recovering the original permutation means facing a huge number
+          of possible orientations, and it is not even required. The task only asks for something good enough, and the
+          constraints (N and M up to 10<sup>6</sup>) tell you that the intended solution has to be simple and fast. You
+          win by understanding how little the statement really demands, which is a good reminder for many contest
+          problems.
+        </p>
+
+        <h2>Final thoughts</h2>
+
+        <p>
+          It was a nice challenge. The tasks had a good variety, the stories were funny, and several of them, like the
+          pancakes and the ferret, reward one clean observation more than a heavy algorithm. I am happy I took part,
+          and I would gladly do it again.
+        </p>
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="From spectral EEG features and linear baselines to a shared-backbone attention model for sleep apnoea severity.">
+  <title>EEG polysomnography: predicting sleep apnoea with transformers</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; height: auto; }
+    figcaption { margin-top: .6rem; font-size: .9rem; opacity: .8; }
+    .figure-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+    .figure-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .figure-grid figure { margin: 0; min-width: 0; }
+    .figure-grid img { max-height: 360px; object-fit: contain; object-position: center top; }
+    .figure-pair { max-width: 900px; }
+    .figure-triplet { max-width: 1100px; }
+    .wide-figure { max-width: 820px; }
+    pre { overflow-x: auto; }
+    @media (max-width: 680px) {
+      .figure-grid, .figure-grid.three { grid-template-columns: 1fr; }
+      .figure-grid img { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">29 September 2026</time>
+        <h1>EEG polysomnography: predicting sleep apnoea with transformers</h1>
+
+<aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/DertMatt24/Apnoea-EEG"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      apnoea-eeg ↗
+    </a>
+  </div>
+</aside>
+
+        <p>An overnight recording is a strange training example. It contains millions of EEG measurements, but the label we want is a single number for the whole night: the apnoea-hypopnoea index, or AHI. We tried to bridge that gap with increasingly flexible models, starting with linear classifiers and ending with attention over time. The useful lesson was less about finding one winning architecture than about discovering what each representation throws away.</p>
+
+        <p>The <a href="https://www.kaggle.com/datasets/yfrite/polysom">polysomnographic dataset</a> has 40 patients and up to two nights each. We excluded two nights with severe signal artifacts, leaving 78 recordings. Six EEG channels are sampled at 200 Hz, with roughly eight hours per night. The table also contains patient and night information such as age, body measurements, pulse, blood pressure, and oxygen desaturation index (ODI). AHI counts apnoea and hypopnoea events per hour in the dataset's recording-level formulation. Our question was whether the EEG sequence, together with those patient variables, could predict that night-level outcome.</p>
+
+        <h2>Start with the unit of prediction</h2>
+        <p>One person can contribute two nights. If those nights fall on opposite sides of a train/test split, a model can recognize a person rather than generalize to a new one. Patient-grouped evaluation is therefore the right standard for a claim about unseen people. Every transformation that learns from data, including scaling, PCA, and functional PCA, must also be fitted inside the training fold. Some exploratory neural scripts in the repository use a random split of <em>nights</em>; their plots should not be read as patient-independent test results.</p>
+
+        <p>We considered both a continuous AHI prediction and three severity groups: below 5, 5 to under 30, and 30 or above. Regression retains the difference between, say, 6 and 25. Classification optimizes the category directly. Neither formulation can create window-level event labels from a single whole-night AHI. This is weak supervision: the model sees where a night's windows came from, but it is never told which minute contained an event.</p>
+
+        <h2>Before predicting, ask what the embedding sees</h2>
+        <p>The signal pipeline filters line noise at 50 Hz, applies a 1–50 Hz band-pass, and explores ICA for artifact removal. We then divide a night into roughly 60-second windows. A compact spectral representation integrates power in delta, theta, alpha, beta, and gamma bands for each of six channels. That gives 30 numbers per window instead of about 12,000 samples per channel. Wavelet summaries and functional PCA offer different compromises between detail and dimension.</p>
+
+        <div class="figure-grid three figure-triplet">
+          <figure><img src="resources/polysomno/power.png" alt="Two-dimensional embedding of raw spectral power, colored by apnoea severity" loading="lazy"><figcaption>Raw band power keeps a direct link to EEG frequency content.</figcaption></figure>
+          <figure><img src="resources/polysomno/power_FPCA.png" alt="Two-dimensional embedding after functional PCA of spectral power" loading="lazy"><figcaption>Power FPCA compresses how band power changes through the night.</figcaption></figure>
+          <figure><img src="resources/polysomno/fPCA_umap_collored.png" alt="Two-dimensional embedding derived from functional PCA components of the raw signal" loading="lazy"><figcaption>Raw-signal FPCA, then a further two-dimensional projection, emphasizes other variation.</figcaption></figure>
+        </div>
+
+        <p>These maps are exploratory projections, not accuracy measurements. In the presentation, raw power and wavelet features looked more promising for severity separation than raw-signal FPCA. The practical question is whether compression has retained the kind of variation we care about. A visually crisp island in two dimensions is still not a held-out prediction.</p>
+
+        <p>PCA loadings offer another view. Along approximately 400 time windows, the first components appear to emphasize an early deep-sleep period, a late waking period, and a transition around the middle of the night. Their signs are arbitrary, and these interpretations are hypotheses about the curves, not sleep-stage labels.</p>
+
+        <div class="figure-grid figure-pair">
+          <figure><img src="resources/polysomno/loading.png" alt="PCA loadings over approximately 400 EEG windows, with early, late, and middle-night patterns" loading="lazy"><figcaption>Time is still visible in the loadings, even after reducing the night to components.</figcaption></figure>
+          <figure><img src="resources/polysomno/REM.png" alt="Four-cluster fuzzy c-means membership trajectory over an overnight EEG recording" loading="lazy"><figcaption>Four-cluster fuzzy c-means produces a recurring night-long pattern reminiscent of sleep cycles. It does not by itself identify REM.</figcaption></figure>
+        </div>
+
+        <p>The fuzzy-clustering trajectory was especially intriguing. Its repeated shifts resemble the rhythm we expect in a night of sleep, including periods compatible with REM cycling. But a cluster ID has no physiological name until it is checked against scored sleep stages. It is an invitation to investigate, not a discovered REM detector.</p>
+
+        <h2>The simple models earn their place</h2>
+        <p>We first concatenate the EEG features with patient variables. L1-regularized logistic regression gives a sparse and inspectable classification baseline. Two binary thresholds, AHI ≥ 5 and AHI ≥ 30, make an ordinal variant. PCA before logistic regression attacks the severe correlation among neighboring windows and channels. Random forests relax the linear decision boundary; gradient boosting predicts continuous AHI and then bins it into severity.</p>
+
+        <p>The recurring result is more informative than any one score: healthy nights are easiest, while the middle group is often confused with its neighbors. In the repository's summary, the direct logistic model has one-versus-rest AUCs of 0.95, 0.67, and 0.75 across the three groups; the random forest reports 0.99, 0.86, and 0.89. Those figures come from the project's reported experiments, not a new run here, and a small cohort makes fold composition matter a great deal. Gradient-boosted AHI estimates often underestimate the high end and can turn moderate cases into severe ones after thresholding.</p>
+
+        <p>One more caution is easy to miss: ODI is itself a night-level measure of oxygen desaturation and can be very close to the outcome. Including it answers a different question from predicting AHI from EEG alone. The fusion model may be useful, but its apparent success cannot automatically be credited to EEG. Apnoea and hypopnoea counts, their indices, and AHI itself must never enter the predictors when AHI is the target.</p>
+
+        <h2>From a bag of features to a sequence</h2>
+        <p>A flattened night gives a conventional model every window as a separate column. It can learn that a particular position matters, but it has no built-in way to share the same pattern detector across the night or compare distant windows. This motivated two neural ideas in the repository: a learned attention <em>pool</em> that scores each window, and a fuller self-attention block that lets windows exchange information before pooling. They solve different problems.</p>
+
+        <p>In the transformer prototype, each 30-feature power vector is projected to a hidden state. Four-head self-attention compares every window with every other window, then residual connections, layer normalization, and a feed-forward block refine those states. A mean over time yields one EEG vector for the night. A separate MLP embeds seven patient variables. The two vectors are concatenated and passed through a shared backbone, followed by a binary classification head and an AHI regression head.</p>
+
+        <pre class="language-python"><code class="language-python"># Condensed from the repository's TransformerAttention.forward
+h = self.embed(eeg_windows)                    # [batch, windows, hidden]
+a, weights = self.attention(h, h, h)           # windows attend to windows
+h = self.ln1(h + a)
+h = self.ln2(h + self.ff(h))
+
+night = h.mean(dim=1)
+patient = self.patient_embed(patient_features)
+shared = self.shared(torch.cat([night, patient], dim=1))
+
+apnoea_probability = torch.sigmoid(self.classification_head(shared))
+ahi_estimate = self.regression_head(shared)</code></pre>
+
+        <p>The shared part matters. Classification can push the representation toward the presence of disease, while regression asks it to retain differences in severity. In the binary prototype, the loss combines binary cross-entropy with an AHI mean-squared error applied to symptomatic examples. A later three-class attention-pooling experiment uses class-weighted cross-entropy and an AHI loss for the two non-healthy groups. These are concrete design choices, not evidence that joint training always improves either task.</p>
+
+        <p>Self-attention produces a window-by-window relationship matrix. The simpler pooling model instead assigns one scalar score to each window and forms a weighted sum. The distinction matters when interpreting saliency: a high pooling weight says a window contributed strongly to that learned summary, but it is not a verified apnoea event marker. The prototype also has no explicit positional encoding or padding mask in its shown forward pass. Its window order and any padded windows need careful treatment before interpreting attention as a map of sleep physiology.</p>
+
+        <figure class="wide-figure"><img src="resources/polysomno/predicte.png" alt="True versus predicted AHI scatter for the reported neural regression experiment" loading="lazy"><figcaption>Reported true versus predicted AHI. Read this as an exploratory neural-model plot: the visible scripts select an attention-pooling model for training, while the multihead transformer is defined as a separate prototype. A full-dataset scatter, if used, includes training nights and is not held-out performance.</figcaption></figure>
+
+        <p>That final distinction is the honest end of the story. The code contains a useful transformer architecture with a shared multimodal backbone, but the visible training path in <code>joint_model.py</code> comments out <code>TransformerAttention</code> and instantiates <code>SimpleAttention</code>; <code>joint_multinomial.py</code> also trains <code>SimpleAttention</code>. The regression image can illustrate the neural experiment, but it cannot establish a patient-held-out transformer result on its own. With only 78 usable nights and 40 people, a more flexible model can memorize an attractive curve. The next convincing experiment would train the transformer and the pooling baseline under identical patient-grouped splits, with all fitted preprocessing confined to each training fold, and compare both against an ODI-aware tabular baseline.</p>
+
+        <p>The progression from logistic regression to attention was worthwhile because it sharpened the question. Power features made the signal manageable; classical models exposed the hard middle cases; the shared backbone offered a way to learn from both the night's sequence and the patient table. The remaining challenge is to show that the extra temporal machinery generalizes to people it has never seen.</p>
+
+        <section class="references" aria-labelledby="references-title">
+          <h2 id="references-title">References</h2>
+          <ol>
+            <li><a href="https://www.kaggle.com/datasets/yfrite/polysom" target="_blank" rel="noopener noreferrer">Polysomnographic sleep data, Kaggle dataset</a>.</li>
+            <li><a href="https://github.com/DertMatt24/Apnoea-EEG" target="_blank" rel="noopener noreferrer">Apnoea-EEG repository</a>
+          </ol>
+        </section>
+      </article>
+    </main>
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-python.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>
