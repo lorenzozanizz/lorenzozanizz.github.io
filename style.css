@@ -99,3 +99,108 @@ footer { padding-top: 56px; color: #999; font-size: .8rem; }
   max-width: 22px !important;
   object-fit: contain;
 }
+
+.site-layout {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  align-items: start;
+  gap: 40px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  box-sizing: border-box;
+}
+
+/* The outer wrapper now controls the page width. */
+.site-layout > .site {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.page-sidebar {
+  position: sticky;
+  top: 32px;
+}
+
+.sidebar-name {
+  display: block;
+  margin-bottom: 24px;
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.page-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.page-menu a {
+  display: block;
+  padding: 10px 14px;
+  border-radius: 10px;
+  color: #62626b;
+  text-decoration: none;
+}
+
+.page-menu a:hover {
+  background: #f0f0f3;
+  color: #25252d;
+}
+
+.page-menu a[aria-current="page"] {
+  background: #e9e9ee;
+  color: #25252d;
+  font-weight: 700;
+  box-shadow: inset 3px 0 #74748b;
+}
+
+.page-menu a:focus-visible {
+  outline: 2px solid #74748b;
+  outline-offset: 3px;
+}
+
+/* On small screens, navigation sits above the content. */
+@media (max-width: 760px) {
+  .site-layout {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    padding: 20px 16px;
+  }
+
+  .page-sidebar {
+    position: static;
+  }
+
+  .sidebar-name {
+    margin-bottom: 12px;
+  }
+
+  .page-menu {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+.contact-link {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.contact-link > div {
+  min-width: 0;
+}
+
+.contact-link .contact-icon {
+  display: block;
+  width: 28px;
+  height: 28px;
+  max-width: 28px;
+  object-fit: contain;
+  flex: 0 0 28px;
+}
