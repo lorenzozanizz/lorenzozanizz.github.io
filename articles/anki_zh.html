@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Building an Anki add-on for learning Mandarin Chinese from sentences, audio, and spaced repetition.">
+  <title>anki-zh: Making Mandarin sentences stick to memory</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">29 September 2026</time>
+        <h1>anki-zh: Making Mandarin sentences stick to memory</h1>
+
+        <p>
+          I have been learning Mandarin Chinese, and one of the recurring problems is not finding material:
+          there is an effectively unlimited amount of Chinese to read and listen to. The problem is deciding
+          what should stay in memory, and then making sure it actually does.
+        </p>
+
+        <p>
+          I already use
+          <a href="https://apps.ankiweb.net/" target="_blank" rel="noopener noreferrer">Anki</a>
+          for spaced repetition. But creating Chinese cards manually has enough friction that I often do not
+          create the card at all. I wanted a workflow where I could encounter a useful sentence, put it into
+          Anki, generate good audio, and continue studying.
+        </p>
+
+        <p>
+          So I built
+          <a href="https://github.com/lorenzozanizz/anki-zh" target="_blank" rel="noopener noreferrer">anki-zh</a>,
+          a small Anki add-on for learners of Mandarin Chinese.
+        </p>
+
+        <h2>The idea</h2>
+
+        <p>
+          The add-on starts from a sentence rather than from a vocabulary list.
+        </p>
+
+        <pre><code>我最近开始学中文。
+        ↓
+generate audio
+        ↓
+check pronunciation
+        ↓
+add to the current Anki deck
+        ↓
+review later with spaced repetition</code></pre>
+
+        <p>
+          From Anki, I can open <code>Tools → Add Chinese Card</code>, type a Chinese sentence,
+          choose the playback speed, listen to the generated audio, and add the result directly to the deck
+          I am currently using.
+        </p>
+
+        <p>
+          The add-on also has settings for the text-to-speech voice, the content shown on the front and back
+          of the card, and whether an inverse card should be created. The inverse version is useful because it
+          changes the direction of recall: instead of seeing Chinese first, I can hear the sentence and try to
+          recover the written Chinese.
+        </p>
+
+        <pre><code>Chinese text  → meaning / context / audio
+
+or
+
+audio         → Chinese text</code></pre>
+
+        <p>
+          Audio is generated using Azure text-to-speech. The dependencies required for TTS are downloaded the
+          first time the add-on is used.
+        </p>
+
+        <h2>Why Anki?</h2>
+
+        <p>
+          Anki is easy to underestimate because its interface is built around something that looks almost
+          trivial: a question, an answer, and a schedule.
+        </p>
+
+        <p>
+          But the scheduling is the important part. After each review, Anki uses your response to decide when
+          the card should appear again. Material that is easy can be pushed further into the future, while
+          material that is forgotten returns sooner. The point is not to review everything constantly. The
+          point is to spend reviews where memory needs them.
+        </p>
+
+        <p>
+          The
+          <a href="https://docs.ankiweb.net/background.html" target="_blank" rel="noopener noreferrer">Anki manual</a>
+          describes the system in terms of active recall and spaced repetition: try to retrieve an answer from
+          memory, then revisit it across increasingly distributed intervals.
+        </p>
+
+        <p>
+          For language learning this is particularly useful because fluency depends on a large amount of
+          information becoming inexpensive to retrieve. If every word, construction, and sound requires a
+          deliberate lookup, understanding a sentence becomes slow. Some knowledge needs to be available
+          directly.
+        </p>
+
+        <h2>Michael Nielsen and memory as a tool</h2>
+
+        <p>
+          A major influence on how I think about Anki is Michael Nielsen's essay
+          <a href="https://augmentingcognition.com/ltm.html" target="_blank" rel="noopener noreferrer">Augmenting Long-term Memory</a>.
+        </p>
+
+        <p>
+          Nielsen's argument is more interesting than simply saying that flashcards are effective. He treats a
+          personal memory system as a cognitive tool: something that changes what it is practical to learn and
+          retain over long periods.
+        </p>
+
+        <p>
+          One of the central ideas in the essay is that memory can become intentional. Normally we read,
+          understand something for a moment, and hope enough of it survives. With a spaced-repetition system,
+          we can make an explicit decision that a piece of knowledge is worth retaining.
+        </p>
+
+        <pre><code>encounter something useful
+        ↓
+understand it
+        ↓
+turn it into a retrieval problem
+        ↓
+schedule future retrieval
+        ↓
+keep it available</code></pre>
+
+        <p>
+          Nielsen also makes a point I think is especially important: making cards is itself part of learning.
+          Choosing what to ask, deciding what belongs in the answer, and splitting a vague idea into precise
+          questions forces you to inspect what you actually understand.
+        </p>
+
+        <p>
+          This is one reason I do not want <code>anki-zh</code> to become a button that manufactures thousands
+          of generic Chinese cards automatically.
+        </p>
+
+        <p>
+          The useful workflow is almost the opposite. I encounter a sentence that matters to me, decide that I
+          want to remember it, and make that sentence cheap to add to the memory system.
+        </p>
+
+        <h2>Reducing the cost of making good cards</h2>
+
+        <p>
+          There is a practical tension in Anki.
+        </p>
+
+        <p>
+          Good cards are personal, but personal cards take time to create.
+        </p>
+
+        <p>
+          If creating a card means copying the sentence, opening another application, generating audio,
+          downloading the audio file, attaching it to the note, adjusting the fields, and finally returning to
+          Anki, then even a useful sentence may not survive the process.
+        </p>
+
+        <p>
+          That is the problem I wanted the add-on to remove.
+        </p>
+
+        <pre><code>without the add-on:
+
+sentence
+  → find TTS
+  → configure voice
+  → generate audio
+  → save file
+  → return to Anki
+  → create note
+  → attach audio
+  → check card
+  → continue
+
+
+with anki-zh:
+
+sentence
+  → Add Chinese Card
+  → listen
+  → add
+  → continue</code></pre>
+
+        <p>
+          The automation is deliberately around the mechanical work, not the intellectual decision.
+        </p>
+
+        <p>
+          The computer should generate the audio and construct the Anki note. I should still decide which
+          sentence deserves to enter my deck.
+        </p>
+
+        <h2>Why sentences?</h2>
+
+        <p>
+          Isolated vocabulary cards are useful, but Mandarin is not a dictionary lookup exercise. A word is
+          encountered inside syntax, collocations, particles, aspect, tone patterns, and context.
+        </p>
+
+        <p>
+          A sentence can carry several layers at once:
+        </p>
+
+        <pre><code>我已经吃过了。
+
+我          pronoun
+已经        temporal aspect / "already"
+吃          verb
+过          experiential aspect marker
+了          contextual / aspectual change
+
+plus:
+pronunciation
+rhythm
+word order
+the interaction between 过 and 了
+the whole meaning of the utterance</code></pre>
+
+        <p>
+          This does not mean every card should test all of these things simultaneously. Nielsen argues for
+          making many Anki questions as atomic as possible: if a card repeatedly fails, it is often better to
+          split the knowledge into smaller retrieval tasks.
+        </p>
+
+        <p>
+          Sentence cards and atomic cards are not opposites. A sentence can be the context from which several
+          precise questions are derived.
+        </p>
+
+        <pre><code>sentence:
+他昨天没来上课。
+
+possible retrieval tasks:
+
+没来        → what does this negate?
+昨天        → where does the time expression appear?
+来上课      → what is the natural phrase here?
+[audio]     → can I recover the sentence?
+[Chinese]   → can I recognize the sentence immediately?</code></pre>
+
+        <p>
+          The full sentence remains useful because language is compositional. Individual pieces eventually need
+          to work together.
+        </p>
+
+        <h2>Recognition and production are different</h2>
+
+        <p>
+          Anki itself distinguishes notes from cards. A single note can generate multiple cards which test the
+          same underlying information in different directions.
+          Its manual uses foreign-language learning as a standard example: recognizing a foreign word and
+          producing it are different retrieval tasks, so they should not necessarily share the same review
+          history.
+        </p>
+
+        <p>
+          That is also why I added the optional inverse card to <code>anki-zh</code>.
+        </p>
+
+        <pre><code>recognition:
+
+中国 sentence
+    ↓
+understand / recognize it
+
+
+listening recall:
+
+audio
+    ↓
+recover the Chinese sentence</code></pre>
+
+        <p>
+          These are related abilities, but they are not identical. I may recognize a sentence instantly when it
+          is written and still fail to parse it at normal speaking speed.
+        </p>
+
+        <p>
+          Giving audio its own retrieval direction makes that failure visible.
+        </p>
+
+        <h2>Audio matters more in Chinese</h2>
+
+        <p>
+          Mandarin has another complication: knowing a written form does not imply that the corresponding sound
+          is stable in memory.
+        </p>
+
+        <p>
+          Characters do not transparently encode pronunciation in the way an alphabetic spelling system often
+          does. On top of that, tones are lexical information. Remembering the rough sequence of consonants and
+          vowels is not enough.
+        </p>
+
+        <p>
+          For that reason I wanted generated speech to be part of the card-creation workflow rather than an
+          optional cleanup step performed later.
+        </p>
+
+        <p>
+          The preview step matters too. Text-to-speech is useful, but it should still be checked before the card
+          is committed. The add-on therefore lets me play the generated sentence and adjust playback speed before
+          adding it.
+        </p>
+
+        <h2>Anki should support a project, not become the project</h2>
+
+        <p>
+          One of Nielsen's observations I like most is that Anki works particularly well when it serves some
+          larger activity. In his essay, he describes using it while learning enough reinforcement learning to
+          understand the AlphaGo literature. The cards were not the final objective; they supported a concrete
+          intellectual project.
+        </p>
+
+        <p>
+          I think the same principle applies to language learning.
+        </p>
+
+        <p>
+          The objective is not to have a beautiful deck with a large card count. The objective is to read,
+          listen, speak, and understand Chinese. Anki is infrastructure underneath that process.
+        </p>
+
+        <pre><code>bad objective:
+
+maximize number of cards
+
+
+better objective:
+
+read / listen / converse
+        ↓
+notice useful language
+        ↓
+retain selected pieces
+        ↓
+encounter them again in the real language</code></pre>
+
+        <p>
+          This also argues against importing enormous collections of sentences merely because they are
+          available. Nielsen calls disconnected cards "orphan questions": material with too little connection
+          to the rest of what you are doing. Such cards may be technically learnable while still being poor
+          uses of attention.
+        </p>
+
+        <p>
+          A sentence I heard in a conversation, found in a book, struggled with in a video, or needed to express
+          myself has an existing network of associations. That makes it much more interesting than a random
+          sentence selected only because it contains an HSK word.
+        </p>
+
+        <h2>What the add-on actually does</h2>
+
+        <p>
+          <code>anki-zh</code> is intentionally small. According to the current project README, its core workflow
+          is:
+        </p>
+
+        <pre><code>Tools
+└── Add Chinese Card
+    ├── enter a Chinese sentence
+    ├── choose playback speed
+    ├── generate / play audio
+    └── add to the active deck</code></pre>
+
+        <p>
+          Its settings currently allow configuration of:
+        </p>
+
+        <ul>
+          <li>the text-to-speech voice;</li>
+          <li>whether an inverse audio-to-Chinese card is generated;</li>
+          <li>the text displayed on the front of the card;</li>
+          <li>the text displayed on the back of the card.</li>
+        </ul>
+
+        <p>
+          Installation is also intentionally direct: clone or download the repository, copy the
+          <code>addon</code> directory into Anki's add-ons directory, then restart Anki.
+        </p>
+
+        <p>
+          Anki explicitly supports this model. Its official manual describes add-ons as extensions which can
+          add language-specific functionality and modify Anki's normal workflow.
+        </p>
+
+        <h2>The larger idea</h2>
+
+        <p>
+          I started this as a small convenience tool, but the interesting part is the boundary it exposes
+          between software and learning.
+        </p>
+
+        <p>
+          There are two very different things we can automate.
+        </p>
+
+        <pre><code>mechanical work:
+    generate audio
+    create notes
+    populate fields
+    create card variants
+
+intellectual work:
+    decide what matters
+    understand the sentence
+    notice the difficult part
+    formulate the right retrieval task</code></pre>
+
+        <p>
+          Automating the first category makes sense because it reduces friction. Automating the second category
+          too aggressively can remove exactly the cognitive work that makes a good card valuable.
+        </p>
+
+        <p>
+          This is where Nielsen's essay continues to be useful. A memory system is not simply a database into
+          which we pour information. It is a tool for controlling what becomes cognitively available to us.
+          The quality of the selection and the quality of the retrieval questions matter.
+        </p>
+
+        <p>
+          For me, <code>anki-zh</code> is an attempt to make that selection process easier without removing it.
+          I still choose the sentence. I still decide that it is worth remembering. The software handles the
+          repetitive part and hands the result to Anki's scheduler.
+        </p>
+
+        <p>
+          The goal is simple: when I find a useful piece of Chinese today, I want a low-friction way to make it
+          part of the Chinese I can still understand months from now.
+        </p>
+
+        <h2>References</h2>
+
+        <ul>
+          <li>
+            <a href="https://github.com/lorenzozanizz/anki-zh" target="_blank" rel="noopener noreferrer">
+              lorenzozanizz/anki-zh — source code and installation instructions
+            </a>
+          </li>
+          <li>
+            <a href="https://augmentingcognition.com/ltm.html" target="_blank" rel="noopener noreferrer">
+              Michael Nielsen — Augmenting Long-term Memory
+            </a>
+          </li>
+          <li>
+            <a href="https://docs.ankiweb.net/background.html" target="_blank" rel="noopener noreferrer">
+              Anki Manual — Background
+            </a>
+          </li>
+          <li>
+            <a href="https://docs.ankiweb.net/getting-started.html" target="_blank" rel="noopener noreferrer">
+              Anki Manual — Getting Started: cards, notes and card types
+            </a>
+          </li>
+          <li>
+            <a href="https://docs.ankiweb.net/addons.html" target="_blank" rel="noopener noreferrer">
+              Anki Manual — Add-ons
+            </a>
+          </li>
+        </ul>
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+</body>
+</html>
