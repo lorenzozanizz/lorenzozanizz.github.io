@@ -92,3 +92,10 @@ footer { padding-top: 56px; color: #999; font-size: .8rem; }
   opacity: 1;
   box-shadow: 0 0 0 2px #a9bed0;
 }
+
+.article-lang-tag img {
+  width: 22px !important;
+  height: 22px !important;
+  max-width: 22px !important;
+  object-fit: contain;
+}

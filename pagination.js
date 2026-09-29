@@ -14,6 +14,12 @@ function selectedTag() {
   return new URLSearchParams(location.search).get("tag") || "";
 }
 
+function tagsFor(card) {
+  const ordinary = (card.dataset.tags || "").trim().split(/\s+/).filter(Boolean);
+  const language = (card.getAttribute("lang-tag") || "").trim().toLowerCase();
+  return language ? [...ordinary, language] : ordinary;
+}
+
 function linkFor(tag) {
   const url = new URL(location.href);
   if (tag) url.searchParams.set("tag", tag);
@@ -23,9 +29,9 @@ function linkFor(tag) {
 
 function render() {
   const active = selectedTag();
-  const matches = cards.filter(card =>
-    !active || card.dataset.tags?.split(/\s+/).includes(active)
-  );
+    const matches = cards.filter(card =>
+    !active || tagsFor(card).includes(active)
+    );
   const pageCount = Math.max(1, Math.ceil(matches.length / pageSize));
   currentPage = Math.min(currentPage, pageCount);
 
