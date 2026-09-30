@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Building a Hopfield associative memory in C++: Hebbian storage, energy descent, cross-talk and stochastic recall on MNIST digits.">
+  <title>Memories as valleys: Hopfield networks in C++ · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; max-width: 640px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+    .image-placeholder { box-sizing: border-box; display: grid; place-items: center; max-width: 640px; min-height: 280px; padding: 2rem; border: 1px dashed currentColor; text-align: center; opacity: .7; }
+    .eq { display: block; margin: 1.1rem 0; overflow-x: auto; text-align: center; font-family: "Cambria Math", "STIX Two Math", Georgia, serif; font-size: 1.05rem; }
+    .series-nav { display: flex; justify-content: space-between; gap: 1rem; margin: 2.4rem 0 1rem; font-size: .95rem; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">29 September 2026</time>
+        <h1>Memories as valleys: Hopfield networks in C++</h1>
+
+        <p>Show someone a torn photograph of a friend and they will still recognise the face. The missing half does not stop recall; it only makes it take a moment longer.
+          In 1982 John Hopfield turned that observation into a physical system. In his network a memory is not a record that is looked up at an address. It is a state where the dynamics of the network comes to rest, and a damaged input rolls toward it the way a marble rolls to the bottom of a bowl.</p>
+        <p>This is the first post in a short series about <a href="https://github.com/lorenzozanizz/associative-memory">associative-memory</a>, a C++ repository where I implemented a few models that came before modern deep learning: Hopfield networks, Boltzmann machines, Kohonen maps and reservoir computers.
+          Most of the ideas came from Bernhard Mehlig's <em>Machine Learning with Neural Networks</em>, which treats these models with the tools of statistical physics. I wanted to build them from the matrix products up, because each one isolates a single principle that later architectures absorbed.</p>
+        <p>The Hopfield network is the right place to start. It is small enough to hold in your head, it was one of the first neural models with a precise link to neuroscience and physics, and its ideas are still in use: the 2024 Nobel Prize in Physics went to Hopfield and Hinton for foundational work on machine learning with artificial neural networks, and "modern" Hopfield networks with continuous states have been shown to share their update rule with the attention mechanism of transformers.</p>
+
+        <h2>Patterns are stored in the couplings</h2>
+        <p>The network has <var>N</var> binary neurons with states <var>s<sub>i</sub></var> &isin; {&minus;1, +1}. Every pair of neurons is connected by a symmetric weight <var>w<sub>ij</sub></var>. To store a set of patterns <var>x</var><sup>(&mu;)</sup>, Hopfield used a rule that Donald Hebb had proposed for real synapses decades earlier: neurons that are active together strengthen their connection.</p>
+        <span class="eq"><var>w<sub>ij</sub></var> = (1/<var>N</var>) &sum;<sub>&mu;</sub> <var>x<sub>i</sub></var><sup>(&mu;)</sup> <var>x<sub>j</sub></var><sup>(&mu;)</sup>, &nbsp;&nbsp; <var>w<sub>ii</sub></var> = 0</span>
+        <p>In matrix form, each new pattern adds its own outer product to the weight matrix. That is exactly what <code>HebbianPolicy::store</code> does. The pattern arrives as a packed <code>BinaryState</code>, is expanded into a &plusmn;1 vector, and is added as a rank-one update. The diagonal is cleared afterwards because a neuron must not reinforce itself.</p>
+        <pre class="language-cpp"><code class="language-cpp">virtual void store(BinaryState&amp; bs) override {
+    this-&gt;memorized_amt++;
+    for (int i = 0; i &lt; this-&gt;net_size; ++i)
+        this-&gt;intermediate(i) = (bs.get(i)) ? DataType(1) : DataType(-1);
+    // Note eigen optimizes this.
+    this-&gt;weights.noalias() +=
+        (this-&gt;intermediate * this-&gt;intermediate.transpose()) / this-&gt;net_size;
+    this-&gt;weights.diagonal().setZero();
+}</code></pre>
+        <p>The weighting scheme is a template parameter of the network, so the compiler knows the concrete policy when it builds the update loop. The repository has three: the dense Hebbian rule above, the Storkey rule that we will meet later, and a matrix-free policy that recomputes each weight from the stored patterns. The matrix-free version trades time for memory, which matters when a 128&nbsp;&times;&nbsp;128 image gives a network of 16,384 neurons and a dense float matrix of about 1&nbsp;GB.</p>
+
+        <h2>Recall is a descent in energy</h2>
+        <p>Storing patterns is only useful if the network can return to them. Each neuron looks at its <em>local field</em>, the weighted sum of the other neurons, and aligns with it:</p>
+        <span class="eq"><var>b<sub>i</sub></var> = &sum;<sub><var>j</var></sub> <var>w<sub>ij</sub></var> <var>s<sub>j</sub></var>, &nbsp;&nbsp; <var>s<sub>i</sub></var> &larr; sgn(<var>b<sub>i</sub></var>)</span>
+        <p>Hopfield's key observation was that this rule minimises a quantity he called the energy:</p>
+        <span class="eq"><var>H</var> = &minus;&frac12; &sum;<sub><var>ij</var></sub> <var>w<sub>ij</sub></var> <var>s<sub>i</sub></var> <var>s<sub>j</sub></var></span>
+        <p>If one neuron changes sign, the energy changes by &minus;2&nbsp;|<var>b<sub>i</sub></var>| or not at all. Because the weights are symmetric and the diagonal is zero, the energy can never increase under one-neuron updates, and a finite network must stop at a local minimum. The stored patterns are such minima, provided there are not too many of them. The energy in the code is the same quadratic form:</p>
+        <pre class="language-cpp"><code class="language-cpp">virtual DataType energy(const BinaryState&amp; bs) override {
+    for (int i = 0; i &lt; this-&gt;net_size; ++i)
+        intermediate(i) = (bs.get(i)) ? 1 : -1;
+    return -0.5 * intermediate.dot( weights * intermediate );
+}</code></pre>
+        <p>The guarantee depends on the order of the updates, so <code>DenseHopfieldNetwork::run</code> supports three policies. <em>Asynchronous</em> updates pick one random neuron per step and follow the argument above exactly. <em>Synchronous</em> updates change every neuron at once; they are fast with a single matrix&ndash;vector product, but they can oscillate between two states forever. <em>Group</em> updates sit between the two and change a random subset per step. This is the asynchronous branch:</p>
+        <pre class="language-cpp"><code class="language-cpp">else if (uc.up == UpdatePolicy::Asynchronous) {
+    // Select a single state and act upon it.
+    auto state_index = NetUtils::pick_random_state(this-&gt;network_size);
+    update_indexes.push_back(state_index);
+    this-&gt;policy.compute_local_fields(
+        this-&gt;binary_state, update_indexes, local_fields_out);
+    // Apply the signum activation function and notify.
+    this-&gt;binary_state.set_value(state_index, MathOps::sgn(local_fields_out[0]) &gt; 0);
+    this-&gt;notify_state(std::tuple(state_index, this-&gt;binary_state.get(state_index)));
+}</code></pre>
+        <p>The <code>notify_*</code> calls feed a set of observers. A <code>HopfieldLogger</code> can collect the states into a GIF, and it can record the energy and the order parameters over time. The network computes those quantities only if a logger asks for them.</p>
+
+        <h2>Denoising a handwritten five</h2>
+        <p>The example stores one representative of each MNIST digit, binarised with Otsu's method, in a network of 784 neurons. It then takes the stored five, flips each pixel with probability 0.15, and lets the network run with groups of 60 neurons per step:</p>
+        <pre class="language-cpp"><code class="language-cpp">BinaryState deformed_5(MNIST_SIZE * MNIST_SIZE);
+deformed_5.copy_content(binary_states[5]);
+StateUtils::perturb_state(deformed_5, /* Noise level */ 0.15);
+
+UpdateConfig uc = { UpdatePolicy::GroupUpdate, 60 };
+dhn.feed(deformed_5);
+dhn.run(/* Iterations */ 200, uc);</code></pre>
+        <figure><img src="resources/associative_memory/Hopefield1.jpeg" alt="Energy and order parameters of the deterministic Hopfield network over 200 iterations"><figcaption>Left: the energy falls from about &minus;1,100 to about &minus;2,300 in the first 40 iterations and then stays flat. Right: time-averaged agreement between the network state and each of the ten stored digits.</figcaption></figure>
+        <p>The energy curve shows the descent: most of the work happens in the first 40 steps, which is about 2,400 single-neuron updates, or three passes over the network. After that the state sits in a minimum.</p>
+        <p>The order parameters on the right are more interesting than they first look. Each curve is the fraction of pixels on which the network agrees with one stored digit, averaged over time. Mehlig uses the overlap <var>m</var><sub>&mu;</sub> = (1/<var>N</var>) &sum;<sub><var>i</var></sub> <var>s<sub>i</sub></var> <var>x<sub>i</sub></var><sup>(&mu;)</sup> instead; the two are related by agreement = (1 + <var>m</var><sub>&mu;</sub>)/2. All ten curves end between 0.82 and 0.92. The network does not agree with <em>every</em> digit; the digits agree with each other. Most of an MNIST image is background, so any two binarised digits already match on most pixels. That shared structure is the central weakness of the Hebbian rule, and it has a name.</p>
+
+        <h2>Where memories interfere</h2>
+        <p>Feed a stored pattern <var>x</var><sup>(&nu;)</sup> into the network and expand its local field. One term comes from the pattern itself; the others come from every other stored pattern:</p>
+        <span class="eq"><var>b<sub>i</sub></var> = <var>x<sub>i</sub></var><sup>(&nu;)</sup> + (1/<var>N</var>) &sum;<sub><var>j</var>&ne;<var>i</var></sub> &sum;<sub>&mu;&ne;&nu;</sub> <var>x<sub>i</sub></var><sup>(&mu;)</sup> <var>x<sub>j</sub></var><sup>(&mu;)</sup> <var>x<sub>j</sub></var><sup>(&nu;)</sup></span>
+        <p>The second term is the <em>cross-talk</em>. Mehlig multiplies it by &minus;<var>x<sub>i</sub></var><sup>(&nu;)</sup> to get <var>C<sub>i</sub></var>: if <var>C<sub>i</sub></var> &gt; 1, the cross-talk is strong enough to flip bit <var>i</var> of a perfect memory on the first update. For random, uncorrelated patterns the cross-talk behaves like Gaussian noise, and the network holds about 0.14&nbsp;<var>N</var> patterns before recall collapses. Digits are not random, so the real limit is far lower. <code>HebbianCrossTalkTermVisualizer</code> computes <var>C<sub>i</sub></var> for every pixel so that we can see where the interference lands:</p>
+        <pre class="language-cpp"><code class="language-cpp">for (int i = 0; i &lt; size; ++i) {
+    sum_i = 0.0;
+    for (BinaryState* mu : init) {
+        BinaryState&amp; x_mu = *mu;
+        const signed char x_mu_i = x_mu.get(i) ? 1 : -1;
+        for (int j = 0; j &lt; size; ++j) {
+            if (j == i)
+                continue;
+            const signed char x_mu_j = x_mu.get(j) ? 1 : -1;
+            const signed char x_v_j = reference.get(j) ? 1 : -1;
+            sum_i += x_mu_i * x_mu_j * x_v_j;
+        }
+    }
+    sum_i /= -((double)(reference.get(i) ? 1 : -1)) * size;
+    if (sum_i &lt; 0.0) sum_i = 0.0;
+    cross_talks[i] = sum_i;
+}</code></pre>
+        <p>Negative values help recall, so the visualiser clips them to zero and shows only the harmful part. The example measures the seven against the four and the nine, three digits that share a long diagonal stroke.</p>
+        <figure><div class="image-placeholder">Cross-talk heatmap for the seven against the four and the nine</div><figcaption>Cross-talk <var>C<sub>i</sub></var> of the stored seven caused by the four and the nine. Pixels above 1 flip on the first update.</figcaption></figure>
+        <p>The Hebbian rule adds every pattern without regard for what is already stored. The Storkey rule, available as <code>StorkeyPolicy</code>, subtracts the local fields that the existing weights already produce for the new pattern. This lowers the interference between correlated patterns and raises the capacity while keeping the rule local and incremental.</p>
+
+        <h2>Adding noise on purpose</h2>
+        <p>Cross-talk has a second effect. Besides the stored patterns, the energy landscape contains <em>spurious</em> minima, such as mixtures of three memories, where a deterministic network can get stuck. The stochastic Hopfield network replaces the sign function with a probability:</p>
+        <span class="eq"><var>P</var>(<var>s<sub>i</sub></var> = +1) = 1 / (1 + e<sup>&minus;2&beta;<var>b<sub>i</sub></var></sup>)</span>
+        <p>At large &beta; the network behaves like the deterministic one. At small &beta; it moves almost at random, which lets it climb out of shallow minima. The implementation is a sigmoid and a uniform draw:</p>
+        <pre class="language-cpp"><code class="language-cpp">static double boltzmann_probability(DataType value, double temperature) {
+    return 1 / (1 + std::exp(-2 * temperature * value));
+}
+
+signed char compute_value(DataType local_field, double temperature) {
+    auto prob = boltzmann_probability(local_field, temperature);
+    if (uniform(generator) &lt; prob)
+        return true;
+    return false;
+}</code></pre>
+        <p>Note the convention: the scheduled value multiplies the local field, so it plays the role of the inverse temperature &beta;, not of the temperature. A schedule that anneals the network, from noisy exploration to a clean final state, must therefore <em>increase</em> this value over time. The <code>AnnealingScheduler</code> hierarchy provides constant, linear and user-defined schedules.</p>
+
+        <h2>A classifier made of attractors</h2>
+        <p>If each stored digit is a valley, the valley that a new image falls into is a prediction. The example feeds 2,000 unseen MNIST digits to the network, runs five group updates of 15 neurons each, and asks a <code>HopfieldClassifier</code> which stored pattern the final state agrees with most. If the best agreement is below 0.7, the image is rejected. The result is a 10&nbsp;&times;&nbsp;11 confusion matrix whose last column counts the rejections.</p>
+        <figure><div class="image-placeholder">Confusion matrix of the attractor classifier</div><figcaption>Confusion matrix on 2,000 MNIST digits with ten stored representatives. The eleventh column counts rejected images.</figcaption></figure>
+        <p>Ten attractors cannot capture the variety of handwriting in MNIST, and the correlations that caused the cross-talk above also pull many images into the wrong valley. The classifier is not a competitive model. It is a direct way to see what an attractor landscape does to data it has never seen.</p>
+
+        <h2>What carries forward</h2>
+        <p>The Hopfield network recalls, but it cannot generalise: it holds exactly the patterns we give it and nothing about the distribution they come from. The stochastic version already contains the missing piece. At finite &beta; it samples states with probability proportional to e<sup>&minus;&beta;<var>H</var></sup>, so the energy defines a probability distribution. If we could <em>learn</em> the weights so that this distribution matches the data, and add neurons that the data never sees, the network would become a generative model. That model is the Boltzmann machine, and it is the subject of the next post.</p>
+
+        <nav class="series-nav" aria-label="Series navigation"><span></span><a href="boltzmann-machines.html">Boltzmann machines &rarr;</a></nav>
+
+        <section class="references" aria-labelledby="references-title">
+  <h2 id="references-title">References</h2>
+  <ol>
+    <li id="ref-1"><a href="https://doi.org/10.1073/pnas.79.8.2554" target="_blank" rel="noopener noreferrer">Hopfield, J. J. (1982). &ldquo;Neural networks and physical systems with emergent collective computational abilities.&rdquo; <em>PNAS</em> 79(8), 2554&ndash;2558.</a></li>
+    <li id="ref-2"><a href="https://doi.org/10.1017/9781108860604" target="_blank" rel="noopener noreferrer">Mehlig, Bernhard (2021). <em>Machine Learning with Neural Networks: An Introduction for Scientists and Engineers.</em> Cambridge University Press.</a></li>
+    <li id="ref-3"><a href="https://arxiv.org/abs/1901.05639" target="_blank" rel="noopener noreferrer">Mehlig, Bernhard. <em>Machine learning with neural networks</em>, lecture notes, arXiv:1901.05639.</a></li>
+    <li id="ref-4">Hebb, D. O. (1949). <em>The Organization of Behavior.</em> Wiley.</li>
+    <li id="ref-5"><a href="https://doi.org/10.1103/PhysRevLett.55.1530" target="_blank" rel="noopener noreferrer">Amit, D. J.; Gutfreund, H.; Sompolinsky, H. (1985). &ldquo;Storing infinite numbers of patterns in a spin-glass model of neural networks.&rdquo; <em>Physical Review Letters</em> 55, 1530.</a></li>
+    <li id="ref-6">Storkey, A. (1997). &ldquo;Increasing the capacity of a Hopfield network without sacrificing functionality.&rdquo; <em>ICANN&rsquo;97</em>, Lecture Notes in Computer Science 1327.</li>
+    <li id="ref-7"><a href="https://arxiv.org/abs/2008.02217" target="_blank" rel="noopener noreferrer">Ramsauer, H. et al. (2020). &ldquo;Hopfield Networks is All You Need.&rdquo; arXiv:2008.02217.</a></li>
+    <li id="ref-8"><a href="https://www.nobelprize.org/prizes/physics/2024/summary/" target="_blank" rel="noopener noreferrer">The Nobel Prize in Physics 2024: John J. Hopfield and Geoffrey E. Hinton.</a></li>
+    <li id="ref-9">Otsu, N. (1979). &ldquo;A threshold selection method from gray-level histograms.&rdquo; <em>IEEE Transactions on Systems, Man, and Cybernetics</em> 9(1), 62&ndash;66.</li>
+    <li id="ref-10">LeCun, Y.; Bottou, L.; Bengio, Y.; Haffner, P. (1998). &ldquo;Gradient-based learning applied to document recognition.&rdquo; <em>Proceedings of the IEEE</em> 86(11). (MNIST)</li>
+    <li id="ref-11"><a href="https://github.com/lorenzozanizz/associative-memory" target="_blank" rel="noopener noreferrer">Zani, Lorenzo. <em>associative-memory</em>: a pure C++ learning resource for foundational machine learning. GitHub repository.</a></li>
+  </ol>
+</section>
+
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-c.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-cpp.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>

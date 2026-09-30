@@ -204,3 +204,50 @@ footer { padding-top: 56px; color: #999; font-size: .8rem; }
   object-fit: contain;
   flex: 0 0 28px;
 }
+
+
+
+  .toc {
+    margin: 0 0 2rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    border-radius: 8px;
+    font-size: .9rem;
+  }
+
+  .toc-title {
+    margin-bottom: .6rem;
+    font-weight: 700;
+  }
+
+  .toc nav ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .toc nav ul ul {
+    margin: .25rem 0 0 1rem;
+  }
+
+  .toc li + li {
+    margin-top: .3rem;
+  }
+
+  .toc a {
+    color: inherit;
+    text-decoration: none;
+    opacity: .75;
+  }
+
+  .toc a:hover,
+  .toc a:focus {
+    opacity: 1;
+    text-decoration: underline;
+  }
+
+  /* Prevent a heading from hiding underneath a sticky header. */
+  article h2,
+  article h3 {
+    scroll-margin-top: 1.5rem;
+  }

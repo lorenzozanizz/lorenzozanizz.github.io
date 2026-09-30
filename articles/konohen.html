@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Building a Kohonen self-organising map in C++: best-matching units, neighbourhood learning, sigma schedules, majority labels, U-matrix and k-means on MNIST.">
+  <title>Maps that keep neighbours close: Kohonen self-organising maps in C++ · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; max-width: 640px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+    .image-placeholder { box-sizing: border-box; display: grid; place-items: center; max-width: 640px; min-height: 280px; padding: 2rem; border: 1px dashed currentColor; text-align: center; opacity: .7; }
+    .eq { display: block; margin: 1.1rem 0; overflow-x: auto; text-align: center; font-family: "Cambria Math", "STIX Two Math", Georgia, serif; font-size: 1.05rem; }
+    .series-nav { display: flex; justify-content: space-between; gap: 1rem; margin: 2.4rem 0 1rem; font-size: .95rem; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">29 September 2026</time>
+        <h1>Maps that keep neighbours close: Kohonen self-organising maps in C++</h1>
+
+        <p>Touch your thumb, then your index finger. The two sensations are processed by neighbouring patches of your somatosensory cortex, and the whole body is laid out across that strip of tissue in a distorted but continuous map. Vision and hearing have maps of the same kind: nearby points on the retina, and nearby frequencies in the cochlea, excite nearby neurons.</p>
+        <p>Teuvo Kohonen asked in 1982 what the simplest rule is that can make such maps form by themselves, without a teacher and without a genetic blueprint for every connection. His answer, the self-organising map (SOM), is the third model in this series. After the energy-based <a href="hopfield-networks.html">Hopfield networks</a> and <a href="boltzmann-machines.html">Boltzmann machines</a>, it is interesting because it uses a different principle: units compete for each input, and the winner's neighbours on a grid learn with it. The outcome is a projection of high-dimensional data onto a two-dimensional sheet that keeps similar inputs close together.</p>
+        <p>The C++ class is called <code>KonohenMapEigen</code>, a letter swap that has stayed in the repository since the first commit. I will use Kohonen in the text and the real identifiers in the code.</p>
+
+        <h2>Two spaces and one winner</h2>
+        <p>A SOM connects two spaces. The input space holds the data, here 28&nbsp;&times;&nbsp;28 MNIST digits as vectors in &#8477;<sup>784</sup>. The output space is a lattice of units, here a 10&nbsp;&times;&nbsp;10 grid. Each unit <var>r</var> has a weight vector <var>w</var><sub><var>r</var></sub> in the input space, a prototype of the inputs that it represents. For an input <var>x</var>, the <em>best-matching unit</em> is the one whose prototype is closest:</p>
+        <span class="eq"><var>r</var><sub>0</sub> = argmin<sub><var>r</var></sub> &Vert;<var>x</var> &minus; <var>w</var><sub><var>r</var></sub>&Vert;</span>
+        <p>The weights are stored as the columns of one matrix, so the search for a single input is one Eigen expression:</p>
+        <pre class="language-cpp"><code class="language-cpp">unsigned int map(const Eigen::VectorXd&amp; x) const {
+    unsigned int winner = 0;
+    (weight_vectors.colwise() - x).colwise().norm().minCoeff(&amp;winner);
+    return winner;
+}</code></pre>
+        <p>For a batch of inputs, the code avoids computing each difference by expanding the squared distance, &Vert;<var>x</var> &minus; <var>w</var>&Vert;<sup>2</sup> = &Vert;<var>w</var>&Vert;<sup>2</sup> + &Vert;<var>x</var>&Vert;<sup>2</sup> &minus; 2<var>w</var><sup>T</sup><var>x</var>. The expensive part becomes a single matrix product between all prototypes and all inputs, which a BLAS-style kernel handles far better than a loop of subtractions:</p>
+        <pre class="language-cpp"><code class="language-cpp">Eigen::RowVectorXd w_norms = weight_vectors.colwise().squaredNorm();
+Eigen::RowVectorXd x_norms = batch.colwise().squaredNorm();
+
+Eigen::MatrixXd dist = w_norms.transpose().replicate(1, B)
+    + x_norms.replicate(N, 1) - 2.0 * weight_vectors.transpose() * batch;
+
+Eigen::VectorXi bmus(B);
+for (int b = 0; b &lt; B; ++b)
+    dist.col(b).minCoeff(&amp;bmus(b));</code></pre>
+
+        <h2>The neighbours learn with the winner</h2>
+        <p>If only the winner learned, the SOM would be online <var>k</var>-means: every prototype would move toward its own inputs, and the grid positions would mean nothing. Kohonen's rule also moves the units that are near the winner <em>on the grid</em>, with a strength that decreases with lattice distance:</p>
+        <span class="eq">&delta;<var>w</var><sub><var>r</var></sub> = &eta; &Lambda;(<var>r</var>, <var>r</var><sub>0</sub>) (<var>x</var> &minus; <var>w</var><sub><var>r</var></sub>), &nbsp;&nbsp; &Lambda;(<var>r</var>, <var>r</var><sub>0</sub>) = exp(&minus;&vert;<var>r</var> &minus; <var>r</var><sub>0</sub>&vert;<sup>2</sup> / 2&sigma;<sup>2</sup>)</span>
+        <p>This cooperation is what builds the map. Two inputs that activate neighbouring units pull those units, and their neighbours, toward similar positions in the input space. Over many updates, units that are close on the grid end up with prototypes that are close in the data. The training loop in <code>KonohenMapEigen::train</code> is a direct translation:</p>
+        <pre class="language-cpp"><code class="language-cpp">for (const auto&amp; input : data.get_data()) {
+    // find best matching unit
+    unsigned int bmu = map(input);
+    int bmu_x = x_from_idx(bmu);
+    int bmu_y = y_from_idx(bmu);
+    // iterate over neighbors of BMU
+    for (auto it = nf.begin(bmu_x, bmu_y); it != nf.end(bmu_x, bmu_y); ++it) {
+        unsigned int idx = it.index();
+        double h = it.contribution_weight();
+        // update weights of neuron idx
+        weight_vectors.col(idx) += learning_rate * h * (input - weight_vectors.col(idx));
+    }
+}</code></pre>
+        <p>The neighbourhood is exposed as a forward iterator. <code>NeighbouringFunctionEigen</code> walks a square of radius <code>support_size</code> around the winner, clipped at the edges of the grid, and <code>contribution_weight()</code> returns the Gaussian &Lambda; for the current unit. The training loop does not need to know whether the map is one- or two-dimensional.</p>
+        <p>The square support is an optimisation, and it has a visible effect. The example uses a support of 2, so at most a 5&nbsp;&times;&nbsp;5 block of units is updated. With the initial width &sigma;&nbsp;=&nbsp;3, the Gaussian is still 0.64 at the corners of that block. The effective neighbourhood at the start of training is therefore set by the square, not by &sigma;.</p>
+
+        <h2>Order first, then precision</h2>
+        <p>A wide neighbourhood produces a global ordering, because the whole map moves together. A narrow one lets each unit specialise. Kohonen's practice is to start wide and shrink the width over time, and <code>evolve_sigma</code> provides four schedules. The exponential one is:</p>
+        <pre class="language-cpp"><code class="language-cpp">case exponential: this-&gt;sigma = sigma_0 * std::exp(-static_cast&lt;double&gt;(iteration_step) / tau);
+    break;</code></pre>
+        <p>The example uses &sigma;<sub>0</sub>&nbsp;=&nbsp;3, &tau;&nbsp;=&nbsp;10 and a constant learning rate &eta;&nbsp;=&nbsp;0.1 over 100 passes through 4,000 digits. The width stays at 3 until pass 20. After that the schedule uses the absolute pass number, so at pass 21 &sigma; drops at once to 3&nbsp;e<sup>&minus;2.1</sup>&nbsp;&asymp;&nbsp;0.37, and a direct neighbour of the winner then receives a weight of about 0.02. The training thus has two clear phases: 20 passes of ordering with a 5&nbsp;&times;&nbsp;5 neighbourhood, then 80 passes of what is almost pure competitive learning that refines each prototype in place.</p>
+
+        <h2>Reading the map</h2>
+        <p>The SOM is trained without labels, but we can use the labels afterwards to see what it learned. <code>MajorityMappingEigen</code> sends every training digit to its best-matching unit and counts the labels that each unit receives. A unit gets a label only if one digit makes up at least 60&nbsp;% of its hits; otherwise it stays unlabelled.</p>
+        <pre class="language-cpp"><code class="language-cpp">int most_frequent_hit(int idx) {
+    Eigen::VectorXd&amp; labels = hits_map[idx];
+    Eigen::Index maxIdx;
+    int total = labels.sum();
+    if (total == 0) return -1;
+    float max = labels.maxCoeff(&amp;maxIdx);
+    if (max &gt;= threshold * total) {
+        return maxIdx;
+    }
+    return -1;
+}</code></pre>
+        <figure><img src="resources/associative_memory/gnuplot_res.png" alt="Majority labels of the 10 by 10 SOM units trained on MNIST" width="640" height="384"><figcaption>Majority label of each unit of the 10&nbsp;&times;&nbsp;10 map. Colour 0 (black) marks units without a 60&nbsp;% majority; colours 1&ndash;10 are the digits 0&ndash;9.</figcaption></figure>
+        <p>Units with the same label form connected patches, which is the topology preservation that the neighbourhood rule was designed to produce. The black units are as informative as the coloured ones. Several of them sit between two patches, where the prototype is a blend of two digits and no class reaches the threshold.</p>
+        <p>The labels are borrowed information. The map itself can also show its clusters, because the distance between neighbouring prototypes is small inside a cluster and large across a border. The U-matrix of Ultsch and Siemon makes this visible: for a <var>W</var>&nbsp;&times;&nbsp;<var>H</var> map it builds a (2<var>W</var>&minus;1)&nbsp;&times;&nbsp;(2<var>H</var>&minus;1) image in which the cells between units hold the distance between their prototypes and each unit cell holds the mean of its surroundings. <code>UClusteringEigen::compute</code> fills it like this:</p>
+        <pre class="language-cpp"><code class="language-cpp">if (x != width - 1) {
+    float d_h = computing_distance(i, j);
+    u(2 * x + 1, 2 * y) = d_h; // horizontal distance
+}
+if (y != heigth - 1) {
+    float d_v = computing_distance(i, k);
+    u(2 * x, 2 * y + 1) = d_v; // vertical distance
+}
+if ((x != width - 1) &amp;&amp; (y != heigth - 1)) {
+    float d_d = computing_distance(i, z);
+    u(2 * x + 1, 2 * y + 1) = d_d; // diagonal distance
+}
+double value = neighb_mean(2 * x, 2 * y);
+u(2 * x, 2 * y) = value;</code></pre>
+        <figure><div class="image-placeholder">U-matrix of the trained map</div><figcaption>U-matrix of the 10&nbsp;&times;&nbsp;10 map. Bright ridges are large distances between neighbouring prototypes and mark cluster borders.</figcaption></figure>
+        <p>The repository offers two more views: a full 100&nbsp;&times;&nbsp;100 matrix of distances between all prototypes, and <var>k</var>-means with ten clusters run on the prototypes instead of on the raw images. Because the prototypes are already an ordered summary of the data, <var>k</var>-means on 100 vectors is cheap, and its clusters can be drawn back onto the grid.</p>
+        <figure><img src="resources/associative_memory/cluster.png" alt="K-means clusters of the SOM prototypes drawn on the grid" width="640" height="384"><figcaption><var>k</var>-means with ten clusters on the 100 unit prototypes, drawn on the map.</figcaption></figure>
+        <p>Compare this picture with the majority labels. <var>k</var>-means knows only prototype distances, but its clusters also form mostly connected regions on the grid. This is the practical value of a SOM: the grid is a coordinate system in which ordinary tools produce readable results.</p>
+
+        <h2>Competition as a learning principle</h2>
+        <p>The SOM update is a Hebbian-style rule: move the weights toward the input that activated the unit. On its own that rule would only average. Competition decides <em>who</em> learns, and the neighbourhood decides <em>who learns with them</em>. Those two additions are enough to turn a collection of prototypes into a map. The same winner-take-all idea reappears in vector quantisation and, in a different form, in the top-<var>k</var> routing of mixture-of-experts layers.</p>
+        <p>All three models so far see each input as a static vector. Real signals arrive over time, and a heartbeat or a sentence only makes sense as a sequence. The last post of the series turns to a model that computes with time itself: a large, random, fixed recurrent network whose only trained part is the readout.</p>
+
+        <nav class="series-nav" aria-label="Series navigation"><a href="boltzmann-machines.html">&larr; Boltzmann machines</a><a href="reservoir-computing.html">Reservoir computing &rarr;</a></nav>
+
+        <section class="references" aria-labelledby="references-title">
+  <h2 id="references-title">References</h2>
+  <ol>
+    <li id="ref-1"><a href="https://doi.org/10.1007/BF00337288" target="_blank" rel="noopener noreferrer">Kohonen, T. (1982). &ldquo;Self-organized formation of topologically correct feature maps.&rdquo; <em>Biological Cybernetics</em> 43, 59&ndash;69.</a></li>
+    <li id="ref-2"><a href="https://doi.org/10.1017/9781108860604" target="_blank" rel="noopener noreferrer">Mehlig, Bernhard (2021). <em>Machine Learning with Neural Networks: An Introduction for Scientists and Engineers.</em> Cambridge University Press.</a></li>
+    <li id="ref-3"><a href="https://arxiv.org/abs/1901.05639" target="_blank" rel="noopener noreferrer">Mehlig, Bernhard. <em>Machine learning with neural networks</em>, lecture notes, arXiv:1901.05639.</a></li>
+    <li id="ref-4">Kohonen, T. (2001). <em>Self-Organizing Maps</em>, 3rd edition. Springer.</li>
+    <li id="ref-5">Ultsch, A.; Siemon, H. P. (1990). &ldquo;Kohonen&rsquo;s self organizing feature maps for exploratory data analysis.&rdquo; <em>Proceedings of the International Neural Network Conference (INNC-90)</em>, Paris.</li>
+    <li id="ref-6">LeCun, Y.; Bottou, L.; Bengio, Y.; Haffner, P. (1998). &ldquo;Gradient-based learning applied to document recognition.&rdquo; <em>Proceedings of the IEEE</em> 86(11). (MNIST)</li>
+    <li id="ref-7"><a href="https://github.com/lorenzozanizz/associative-memory" target="_blank" rel="noopener noreferrer">Zani, Lorenzo. <em>associative-memory</em>: a pure C++ learning resource for foundational machine learning. GitHub repository.</a></li>
+  </ol>
+</section>
+
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-c.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-cpp.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>
