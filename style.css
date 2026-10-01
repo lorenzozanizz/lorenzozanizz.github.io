@@ -251,3 +251,27 @@ footer { padding-top: 56px; color: #999; font-size: .8rem; }
   article h3 {
     scroll-margin-top: 1.5rem;
   }
+
+.toc ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.toc ul ul {
+  padding-left: 1.5rem;
+}
+
+.toc li {
+  margin: 0.4rem 0;
+}
+
+.toc {
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 1rem 1.5rem;
+}
+
+.toc a {
+  overflow-wrap: anywhere;
+}

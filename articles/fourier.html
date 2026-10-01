@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Building a small object-oriented discrete Fourier transform in C++, from a text description of a function to a readable spectrum.">
+  <title>An object-oriented Fourier transform in C++ · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+    <script src="../toc.js" defer></script>
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; max-width: 640px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+    .image-placeholder { box-sizing: border-box; display: grid; place-items: center; max-width: 640px; min-height: 280px; padding: 2rem; border: 1px dashed currentColor; text-align: center; opacity: .7; }
+    .equation { margin: 1.2rem 0; text-align: center; font-family: "Cambria Math", "STIX Two Math", Georgia, serif; font-size: 1.1rem; overflow-x: auto; }
+    .table-scroll { overflow-x: auto; }
+    table { border-collapse: collapse; margin: 1.2rem 0; }
+    th, td { padding: .3rem .9rem; text-align: right; border-bottom: 1px solid rgba(127, 127, 127, .35); }
+    th:first-child, td:first-child { text-align: left; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-10-01">1 October 2026</time>
+        <h1>An object-oriented Fourier transform in C++</h1>
+
+        <p>The Fourier transform answers a simple question: which frequencies does a function contain? On paper, the answer is an integral over all of time. In a program, you have a finite list of numbers, taken at a fixed rate, over a fixed interval. Every step between the integral and that list changes what you see in the result.</p>
+        <p>This guide builds a small C++ program that makes those steps explicit. You describe a function in a short text file. The program samples it, optionally tapers it, transforms it, and prints the strongest frequencies. Each of these steps is its own class. That is the point of the design: when you can change one step and keep the others fixed, the well-known surprises of the discrete transform stop being mysterious and become something you can switch on and off.</p>
+        <p>The complete program is about 800 lines of C++14 with no dependencies beyond the standard library. It uses classes, virtual functions, <code>std::vector</code>, <code>std::complex</code> and <code>std::unique_ptr</code>, and nothing more exotic.</p>
+
+        <h2>From an integral to a sum</h2>
+        <p>For a function of time <i>x</i>(<i>t</i>), the continuous Fourier transform is</p>
+        <p class="equation"><i>X</i>(<i>f</i>) = ∫ <i>x</i>(<i>t</i>) e<sup>−i2π<i>ft</i></sup> d<i>t</i></p>
+        <p>A computer cannot integrate over all time, so we take <i>N</i> samples <i>x</i>[<i>n</i>] = <i>x</i>(<i>n</i>/<i>f</i><sub>s</sub>) at a sample rate <i>f</i><sub>s</sub>, and replace the integral with a sum. The result is the discrete Fourier transform (DFT) [1]:</p>
+        <p class="equation"><i>X</i>[<i>k</i>] = Σ<sub><i>n</i>=0</sub><sup><i>N</i>−1</sup> <i>x</i>[<i>n</i>] e<sup>−i2π<i>kn</i>/<i>N</i></sup>,&nbsp;&nbsp; <i>k</i> = 0, …, <i>N</i>−1</p>
+        <p>Each output value <i>X</i>[<i>k</i>] is called a bin. Bin <i>k</i> corresponds to the frequency <i>k</i>·<i>f</i><sub>s</sub>/<i>N</i>, so the spacing between bins is <i>f</i><sub>s</sub>/<i>N</i>, which is the inverse of the record length in seconds. One second of data gives bins 1&nbsp;Hz apart, whatever the sample rate.</p>
+        <p>Two decisions hide in this translation. The sample rate limits the highest frequency you can represent: a sampled sinusoid is only unambiguous below half the sample rate, the Nyquist frequency [1, 2]. The record length limits how finely you can separate frequencies. Both decisions happen before any transform runs, which is why the program treats them as separate objects.</p>
+
+        <h2>One class per step</h2>
+        <p>We will implement a pipeline. Each arrow below is a hand-over between two classes, and each class has one job.</p>
+        <pre><code>two-tones.sig > SignalLoader > Function > Signal::sample > SpectrumAnalyzer > Spectrum</code></pre>
+        <p>A <code>Function</code> knows how to evaluate <i>f</i>(<i>t</i>). A <code>Signal</code> holds samples and the rate they were taken at. A <code>Window</code> gives a weight for each sample. A <code>FourierTransform</code> turns a vector of complex numbers into another one. A <code>Spectrum</code> knows how to turn raw bins into frequencies and amplitudes. The <code>SpectrumAnalyzer</code> connects a window and a transform, and the <code>SignalLoader</code> reads the text format. We build them in that order.</p>
+
+        <h2>Functions are objects</h2>
+        <p>The first abstraction is the thing we want to analyse. A function of time needs only one operation, so the base class has a single pure virtual method:</p>
+        <pre class="language-cpp"><code class="language-cpp">class Function {
+public:
+    virtual ~Function() {}
+    virtual double evaluate(double t) const = 0;
+};
+
+// A * sin(2*pi*(f*t + phase)). The phase is in cycles, so 0.25 is a quarter turn.
+class Sine : public Function {
+public:
+    Sine(double amplitude, double frequency, double phase)
+        : amplitude_(amplitude), frequency_(frequency), phase_(phase) {}
+
+    double evaluate(double t) const override {
+        return amplitude_ * std::sin(2.0 * kPi * (frequency_ * t + phase_));
+    }
+
+private:
+    double amplitude_;
+    double frequency_;
+    double phase_;
+};</code></pre>
+        <p>The library also has <code>Gaussian</code> (a pulse) and <code>Constant</code> (an offset). The interesting class is <code>Sum</code>, because the transform is linear: the spectrum of a sum is the sum of the spectra. A sum of functions is itself a function, so it derives from the same base class and owns its terms through <code>std::unique_ptr</code>:</p>
+        <pre class="language-cpp"><code class="language-cpp">class Sum : public Function {
+public:
+    void add(std::unique_ptr&lt;Function&gt; term) { terms_.push_back(std::move(term)); }
+    bool empty() const { return terms_.empty(); }
+
+    double evaluate(double t) const override {
+        double total = 0.0;
+        for (size_t i = 0; i &lt; terms_.size(); ++i) {
+            total += terms_[i]-&gt;evaluate(t);
+        }
+        return total;
+    }
+
+private:
+    std::vector&lt;std::unique_ptr&lt;Function&gt; &gt; terms_;
+};</code></pre>
+        <p>This is the composite pattern: callers cannot tell a single sine from a sum of twenty terms. Sampling then works on any function through the base class. <code>Signal::sample</code> evaluates the function at <i>n</i>/<i>f</i><sub>s</sub> for <i>n</i> = 0 to <i>N</i>−1:</p>
+        <pre class="language-cpp"><code class="language-cpp">// Samples f on [0, duration) at the given rate.
+static Signal sample(const Function&amp; f, double sampleRate, double duration) {
+    const size_t count = static_cast&lt;size_t&gt;(std::lround(duration * sampleRate));
+    std::vector&lt;double&gt; values(count);
+    for (size_t n = 0; n &lt; count; ++n) {
+        values[n] = f.evaluate(n / sampleRate);
+    }
+    return Signal(values, sampleRate);
+}</code></pre>
+        <p>The interval is half-open on purpose. The DFT treats the record as one period of a repeating signal. For a signal that repeats exactly once per record, the sample at <i>t</i> = duration would be a copy of the sample at <i>t</i> = 0.</p>
+
+        <h2>A small language for signals</h2>
+        <p>Recompiling to try a new signal gets tedious quickly, so the program reads signals from <code>.sig</code> files. The format is line-based: one command per line, <code>#</code> starts a comment, and function parameters are <code>key=value</code> pairs. Here is the example we will analyse first:</p>
+        <pre><code># Two tones on top of a small DC offset, sampled for one second.
+rate     256
+duration 1.0
+
+sine     amplitude=1.0 frequency=10
+sine     amplitude=0.5 frequency=40 phase=0.25
+constant value=0.2</code></pre>
+        <p><code>rate</code> and <code>duration</code> set the sampling. Each function line adds one term to a <code>Sum</code>. The parameters have defaults where a sensible one exists (<code>amplitude=1</code>, <code>phase=0</code>) and are required where none does (<code>frequency</code>). The available functions are:</p>
+        <pre><code>sine     amplitude=A frequency=F phase=P    # phase in cycles
+gaussian amplitude=A center=T width=W       # pulse centred at T seconds
+constant value=C</code></pre>
+        <p>Measured data does not come from a formula, so the language also accepts a <code>samples</code> block. The numbers can be spread over as many lines as you like, and the block ends with <code>end</code>:</p>
+        <pre><code># Eight samples typed in by hand: a square-ish wave at 2 Hz.
+rate 8
+samples
+  1  1 -1 -1
+  1  1 -1 -1
+end</code></pre>
+        <p>A file uses either functions or a <code>samples</code> block. Mixing them would force the loader to guess the record length, and a loader that guesses is harder to trust than one that refuses.</p>
+        <p>The parser is a single loop over lines with an <code>std::istringstream</code> per line. The first word selects a command, and the rest of the line becomes a map of parameters. Each command then takes the values it knows:</p>
+        <pre class="language-cpp"><code class="language-cpp">} else if (command == "sine") {
+    Params p = readParams(words, line);
+    allowOnly(p, "amplitude frequency phase", command, line);
+    const double amplitude = take(p, "amplitude", 1.0);
+    const double frequency = require(p, "frequency", command, line);
+    const double phase = take(p, "phase", 0.0);
+    if (frequency &gt; highestFrequency) {
+        highestFrequency = frequency;
+        highestLine = line;
+    }
+    sum.add(std::unique_ptr&lt;Function&gt;(new Sine(amplitude, frequency, phase)));</code></pre>
+        <p>Most of the loader is error handling, and that is deliberate. A typo in a signal file should stop the program with the line number, not produce a spectrum of the wrong signal. The <code>allowOnly</code> check catches misspelled keys before the missing-key check runs, so the message names the real problem:</p>
+        <pre><code>$ ./fourier examples/typo.sig
+fourier: line 3: unknown parameter 'freq' for 'sine' (expected: amplitude frequency phase)</code></pre>
+        <p>The loader also enforces the sampling limit from the first section. A sine at or above half the sample rate cannot be represented by the samples, and would appear in the spectrum at a different, wrong frequency [2]. Because the loader knows both the rate and every frequency in the file, it is the right place to refuse:</p>
+        <pre><code>$ ./fourier examples/alias.sig
+fourier: line 3: sine at 70 Hz needs a rate above 140 (rate is 100)</code></pre>
+
+        <h2>The transform behind an interface</h2>
+        <p>With a signal in hand, we need the transform itself. We will write two implementations, so the rest of the program must not depend on either. The base class describes what every transform provides:</p>
+        <pre class="language-cpp"><code class="language-cpp">class FourierTransform {
+public:
+    virtual ~FourierTransform() {}
+
+    virtual std::vector&lt;Complex&gt; forward(const std::vector&lt;Complex&gt;&amp; x) const = 0;
+
+    // Some algorithms only work for some lengths. Callers ask first.
+    virtual bool supports(size_t length) const { return length &gt; 0; }
+
+    virtual std::string name() const = 0;
+
+    // x[n] = (1/N) sum_k X[k] * exp(+2*pi*i*k*n/N), built from forward().
+    std::vector&lt;Complex&gt; inverse(const std::vector&lt;Complex&gt;&amp; X) const;
+};</code></pre>
+        <p>The <code>supports</code> method looks odd at this point. It will matter once the fast algorithm arrives, so keep it in mind.</p>
+        <p>The first implementation evaluates the definition directly: two nested loops, one over output bins and one over input samples.</p>
+        <pre class="language-cpp"><code class="language-cpp">std::vector&lt;Complex&gt; NaiveDFT::forward(const std::vector&lt;Complex&gt;&amp; x) const {
+    const size_t N = x.size();
+    std::vector&lt;Complex&gt; X(N);
+    for (size_t k = 0; k &lt; N; ++k) {
+        Complex sum(0.0, 0.0);
+        for (size_t n = 0; n &lt; N; ++n) {
+            // exp(-2*pi*i*k*n/N) repeats every N steps of k*n, so reduce
+            // the product first. This keeps the angle small and accurate.
+            const size_t turn = (k * n) % N;
+            const double angle = -2.0 * kPi * turn / N;
+            sum += x[n] * std::polar(1.0, angle);
+        }
+        X[k] = sum;
+    }
+    return X;
+}</code></pre>
+        <p>The only detail beyond the formula is the modulo. The exponential depends on <i>kn</i> only through <i>kn</i> mod <i>N</i>. Reducing the integer product first means <code>std::sin</code> and <code>std::cos</code> always receive an angle between −2π and 0, instead of an angle that grows to thousands of radians for large <i>N</i>, where each call loses precision.</p>
+        <p>The inverse transform needs no second implementation. Conjugating the exponent turns the inverse into the forward transform, so <i>x</i>[<i>n</i>] = conj(DFT(conj(<i>X</i>)))[<i>n</i>] / <i>N</i>. The base class implements that identity once, and every derived class inherits a correct inverse:</p>
+        <pre class="language-cpp"><code class="language-cpp">std::vector&lt;Complex&gt; FourierTransform::inverse(const std::vector&lt;Complex&gt;&amp; X) const {
+    // Conjugate, transform forward, conjugate again, divide by N.
+    std::vector&lt;Complex&gt; conjugated(X.size());
+    for (size_t k = 0; k &lt; X.size(); ++k) {
+        conjugated[k] = std::conj(X[k]);
+    }
+    std::vector&lt;Complex&gt; x = forward(conjugated);
+    const double scale = 1.0 / X.size();
+    for (size_t n = 0; n &lt; x.size(); ++n) {
+        x[n] = std::conj(x[n]) * scale;
+    }
+    return x;
+}</code></pre>
+
+        <h2>Reading a spectrum</h2>
+        <p>The raw output of <code>forward</code> is a vector of complex numbers, and it is not yet a readable answer. For a real signal of length <i>N</i>, a sine of amplitude <i>A</i> that falls exactly on bin <i>k</i> produces |<i>X</i>[<i>k</i>]| = <i>AN</i>/2, and an identical mirror image in bin <i>N</i>−<i>k</i>. To report the amplitude we fold the mirror back and divide by <i>N</i>. That bookkeeping belongs in its own class:</p>
+        <pre class="language-cpp"><code class="language-cpp">// Peak amplitude of a real sinusoid that sits exactly on bin k.
+double amplitude(size_t k) const {
+    const size_t N = bins_.size();
+    const double sides = (k == 0 || 2 * k == N) ? 1.0 : 2.0;
+    return sides * std::abs(bins_[k]) / (N * coherentGain_);
+}</code></pre>
+        <p>Bin 0 (the mean) and bin <i>N</i>/2 (the Nyquist frequency) have no mirror, so they are not doubled. The <code>coherentGain_</code> term is 1 for now; it becomes important in the next section.</p>
+        <p>The <code>SpectrumAnalyzer</code> joins the pieces. It borrows a transform and a window, multiplies the samples by the window weights, runs the transform, and returns a <code>Spectrum</code>. The <code>main</code> function chooses the concrete classes from command-line flags. It is the only code that names <code>NaiveDFT</code> or <code>HannWindow</code> directly.</p>
+        <p>Running the two-tone file gives exactly the three components we wrote into it:</p>
+        <pre><code>$ ./fourier examples/two-tones.sig --out out/two-tones
+256 samples at 256 Hz, radix2-fft, rectangular window, bin width 1 Hz
+   frequency    amplitude
+      10.000       1.0000
+      40.000       0.5000
+       0.000       0.2000</code></pre>
+        <figure><img src="resources/fourier/two-tones-signal.png" alt="The sampled two-tone signal over the first half second" width="640" height="300"><figcaption>The first half second of the sampled two-tone signal, one dot per sample.</figcaption></figure>
+        <figure><img src="resources/fourier/two-tones-spectrum.png" alt="Amplitude spectrum with lines at 0, 10 and 40 Hz" width="640" height="300"><figcaption>Its one-sided amplitude spectrum. The lines at 0, 10 and 40&nbsp;Hz have heights 0.2, 1.0 and 0.5.</figcaption></figure>
+        <p>The rest of the spectrum is not approximately zero, it is at rounding level: the largest amplitude outside those three bins is 1.2 × 10<sup>−15</sup>. That clean result depends on one fact about this example. Both tones complete a whole number of cycles in one second, so each lands exactly on a bin.</p>
+        <p>The hand-typed <code>samples</code> file gives a smaller surprise. It reports one peak at 2&nbsp;Hz with amplitude 1.4142. With only four samples per period, the sequence 1, 1, −1, −1 is exactly √2·sin(2π<i>n</i>/4 + π/4). Four samples cannot tell this "square wave" apart from a sine, so the transform reports a sine. The samples, not the formula you had in mind, define the signal.</p>
+
+        <h2>When a tone falls between bins</h2>
+        <p>Real signals do not arrange their frequencies to fit your record length. Change one number in the file, from 10&nbsp;Hz to 10.5&nbsp;Hz, and the clean picture falls apart:</p>
+        <pre><code>$ ./fourier examples/off-bin.sig
+256 samples at 256 Hz, radix2-fft, rectangular window, bin width 1 Hz
+   frequency    amplitude
+      10.000       0.6518</code></pre>
+        <p>A tone of amplitude 1 now reads as 0.65, and its energy has spread over every bin in the spectrum. The cause is the periodic assumption from the sampling section. The DFT treats the record as one period of a repeating signal. 10.5 cycles do not repeat cleanly, so the implied signal has a jump where the end of the record meets its start. That jump contains energy at all frequencies. This effect is called spectral leakage [3].</p>
+        <p>The standard remedy is a window: a taper that brings the record smoothly to zero at both ends, so that no jump remains. The program already applies a window, the rectangular one, whose weights are all 1. A Hann window uses 0.5 − 0.5 cos(2π<i>n</i>/<i>N</i>). We use the periodic form, divided by <i>N</i> rather than <i>N</i>−1, which Harris recommends for DFT analysis because it keeps the window consistent with the periodic assumption [3]:</p>
+        <pre class="language-cpp"><code class="language-cpp">// Periodic ("DFT-even") Hann window: 0.5 - 0.5 cos(2*pi*n/N).
+class HannWindow : public Window {
+public:
+    double weight(size_t n, size_t length) const override {
+        return 0.5 - 0.5 * std::cos(2.0 * kPi * n / length);
+    }
+    std::string name() const override { return "hann"; }
+};</code></pre>
+        <p>A window also scales the signal down: the average Hann weight is 0.5. The analyzer records that average as the coherent gain and <code>Spectrum::amplitude</code> divides by it, so amplitudes stay in the units of the input. With that correction in place, switching windows is one flag:</p>
+        <pre><code>$ ./fourier examples/off-bin.sig --window hann
+256 samples at 256 Hz, radix2-fft, hann window, bin width 1 Hz
+   frequency    amplitude
+      11.000       0.8489</code></pre>
+        <figure><img src="resources/fourier/leakage.png" alt="Spectra of a 10.5 Hz tone in decibels, rectangular and Hann windows" width="640" height="320"><figcaption>A 10.5&nbsp;Hz tone of amplitude 1, analysed with a rectangular window and with a Hann window. The vertical axis is in decibels.</figcaption></figure>
+        <p>The figure shows the trade. Far from the tone, the Hann spectrum drops much faster: at 30&nbsp;Hz the rectangular window reports 0.0088 and the Hann window 0.000038, more than 200 times less. Near the tone, the Hann peak is wider, spread over more bins.</p>
+        <p>The peak values are a useful check against the literature. For a tone exactly halfway between two bins, Harris lists the worst-case amplitude loss ("scalloping loss") as 3.92&nbsp;dB for the rectangular window and 1.42&nbsp;dB for Hann [3]. Those correspond to amplitude factors of 0.637 and 0.849. The Hann result, 0.8489, matches. The rectangular bins read 0.652 and 0.622 rather than 0.637 each. Their average is 0.637, and the difference between them comes from the mirror image at −10.5&nbsp;Hz, which leaks into the positive bins because the tone sits close to 0&nbsp;Hz. Harris's figure describes the window alone and does not include that interaction.</p>
+        <p>None of this required a change to the transform, the loader or the spectrum class. The window was a separate object from the start, so the experiment cost one flag.</p>
+
+        <h2>A faster transform with the same contract</h2>
+        <p>The naive DFT performs <i>N</i><sup>2</sup> complex multiplications. That is acceptable for 256 samples and becomes a problem for large records. The fast Fourier transform (FFT) reduces the cost to the order of <i>N</i> log <i>N</i>. Cooley and Tukey published the algorithm in 1965 [4], although Heideman, Johnson and Burrus later traced the same idea to unpublished work by Gauss from around 1805 [5].</p>
+        <p>The radix-2 version rests on one observation. If <i>N</i> is even, split the samples into those with even and odd indices. Each half is a signal of length <i>N</i>/2 with its own DFT, <i>E</i> and <i>O</i>. The full transform follows from the two halves:</p>
+        <p class="equation"><i>X</i>[<i>k</i>] = <i>E</i>[<i>k</i>] + e<sup>−i2π<i>k</i>/<i>N</i></sup><i>O</i>[<i>k</i>],&nbsp;&nbsp; <i>X</i>[<i>k</i>+<i>N</i>/2] = <i>E</i>[<i>k</i>] − e<sup>−i2π<i>k</i>/<i>N</i></sup><i>O</i>[<i>k</i>]</p>
+        <p>Apply the same split to each half, and again, until the pieces have length 1. The recursive form maps line by line onto that description:</p>
+        <pre class="language-cpp"><code class="language-cpp">void fftInPlace(std::vector&lt;Complex&gt;&amp; a) {
+    const size_t N = a.size();
+    if (N == 1) {
+        return;
+    }
+    // Split into even- and odd-indexed samples and transform each half.
+    std::vector&lt;Complex&gt; even(N / 2);
+    std::vector&lt;Complex&gt; odd(N / 2);
+    for (size_t i = 0; i &lt; N / 2; ++i) {
+        even[i] = a[2 * i];
+        odd[i] = a[2 * i + 1];
+    }
+    fftInPlace(even);
+    fftInPlace(odd);
+
+    // Combine: X[k] = E[k] + w^k O[k],  X[k + N/2] = E[k] - w^k O[k].
+    for (size_t k = 0; k &lt; N / 2; ++k) {
+        const Complex twiddle = std::polar(1.0, -2.0 * kPi * k / N) * odd[k];
+        a[k] = even[k] + twiddle;
+        a[k + N / 2] = even[k] - twiddle;
+    }
+}</code></pre>
+        <p>The split only works if every level has an even length, so <i>N</i> must be a power of two. This is where <code>supports</code> earns its place. Without it, <code>RadixTwoFFT</code> would accept fewer inputs than its base class promises, and code written against <code>FourierTransform</code> would break when handed the fast version. Liskov and Wing describe exactly this: a subtype must not strengthen the preconditions of the type it replaces [6]. Putting the length question into the base class makes the restriction part of the contract. Every caller can ask before calling, and <code>main</code> uses the answer to pick an algorithm:</p>
+        <pre class="language-cpp"><code class="language-cpp">// The only place in the program that knows the concrete transform classes.
+std::unique_ptr&lt;FourierTransform&gt; makeTransform(const std::string&amp; name, size_t length) {
+    std::unique_ptr&lt;FourierTransform&gt; fft(new RadixTwoFFT());
+    if (name == "fft" || (name == "auto" &amp;&amp; fft-&gt;supports(length))) {
+        return fft;
+    }
+    if (name == "dft" || name == "auto") {
+        return std::unique_ptr&lt;FourierTransform&gt;(new NaiveDFT());
+    }
+    throw std::runtime_error("unknown transform '" + name + "'");
+}</code></pre>
+        <p>With the default <code>auto</code>, a 12-sample file quietly uses the naive DFT. If you force the FFT, the analyzer refuses instead of returning a wrong answer:</p>
+        <pre><code>$ ./fourier examples/twelve.sig --transform fft
+fourier: radix2-fft cannot transform 12 samples</code></pre>
+        <p>Two implementations of the same interface also give us a test for free: they must agree. The <code>check</code> program transforms random complex vectors with both, and runs the inverse on the FFT output:</p>
+        <pre><code>$ ./check
+     N        max |DFT - FFT|  max |x - inv(fwd(x))|
+     8              9.037e-16              2.289e-16
+    32              3.202e-15              3.511e-16
+   128              1.300e-14              5.979e-16
+   512              5.684e-14              7.772e-16
+  2048              2.508e-13              1.132e-15
+all checks passed</code></pre>
+        <p>The disagreement grows with <i>N</i> but stays at rounding level. The FFT round trip returns the input to within about 10<sup>−15</sup>, which confirms the conjugation trick in the base class. The <code>benchmark</code> program times one forward transform of each kind:</p>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th><i>N</i></th><th>naive-dft (ms)</th><th>radix2-fft (ms)</th></tr></thead>
+            <tbody>
+              <tr><td>256</td><td>1.204</td><td>0.017</td></tr>
+              <tr><td>512</td><td>4.176</td><td>0.035</td></tr>
+              <tr><td>1024</td><td>16.432</td><td>0.076</td></tr>
+              <tr><td>2048</td><td>64.911</td><td>0.166</td></tr>
+              <tr><td>4096</td><td>258.901</td><td>0.373</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>These times come from a Linux container with g++ 13.3 at <code>-O2</code>, so the absolute values will differ on your machine. The shape will not. Each doubling of <i>N</i> multiplies the naive time by about four and the FFT time by a little over two. At 4096 samples the FFT is roughly 700 times faster, and nothing outside <code>transform.cpp</code> changed to get it.</p>
+
+        <h2>Where this design stops</h2>
+        <p>This program is a teaching tool, and its limits are easy to name. The FFT only handles powers of two. The recursion allocates two new vectors at every level. Real input produces a mirrored spectrum, and the code computes both halves anyway. A production library fixes all three. FFTW, for example, supports arbitrary lengths, works in place, and has dedicated transforms for real data [7].</p>
+        <p>FFTW also makes the same design decision as this guide, at a much larger scale. Before transforming, it builds a plan: it tries several algorithms for the given length on the current machine and keeps the fastest [7]. Our <code>makeTransform</code> function asks one question, <code>supports(length)</code>, and picks between two classes. The principle is identical. Callers depend on the contract, the choice of algorithm happens in one place, and that choice can change without touching anything that uses the result.</p>
+        <p>That separation is also what made the experiments in this guide cheap. Aliasing was caught by the loader, leakage was fixed by swapping one window object, and the FFT was verified by comparing it with the class it replaced. Each surprise of the discrete transform lives in one step of the pipeline, and when each step is its own object, you can find it there.</p>
+        <p>The full source, the example <code>.sig</code> files and the script that draws the figures are in the accompanying project. Build it with <code>make</code> and start by changing a frequency in <code>examples/two-tones.sig</code>.</p>
+
+        <section class="references" aria-labelledby="references-title">
+          <h2 id="references-title">References</h2>
+          <ol>
+            <li id="ref-1">
+              Oppenheim, Alan V.; Schafer, Ronald W. (2010). <i>Discrete-Time Signal Processing</i>, 3rd edition. Pearson. Chapters 4 (sampling) and 8 (the discrete Fourier transform).
+            </li>
+            <li id="ref-2">
+              <a href="https://doi.org/10.1109/JRPROC.1949.232969" target="_blank" rel="noopener noreferrer">
+                Shannon, Claude E. (1949). “Communication in the Presence of Noise.” Proceedings of the IRE, 37(1), 10–21.
+              </a>
+            </li>
+            <li id="ref-3">
+              <a href="https://doi.org/10.1109/PROC.1978.10837" target="_blank" rel="noopener noreferrer">
+                Harris, Fredric J. (1978). “On the Use of Windows for Harmonic Analysis with the Discrete Fourier Transform.” Proceedings of the IEEE, 66(1), 51–83.
+              </a>
+            </li>
+            <li id="ref-4">
+              <a href="https://doi.org/10.1090/S0025-5718-1965-0178586-1" target="_blank" rel="noopener noreferrer">
+                Cooley, James W.; Tukey, John W. (1965). “An Algorithm for the Machine Calculation of Complex Fourier Series.” Mathematics of Computation, 19(90), 297–301.
+              </a>
+            </li>
+            <li id="ref-5">
+              <a href="https://doi.org/10.1109/MASSP.1984.1162257" target="_blank" rel="noopener noreferrer">
+                Heideman, Michael T.; Johnson, Don H.; Burrus, C. Sidney (1984). “Gauss and the History of the Fast Fourier Transform.” IEEE ASSP Magazine, 1(4), 14–21.
+              </a>
+            </li>
+            <li id="ref-6">
+              <a href="https://doi.org/10.1145/197320.197383" target="_blank" rel="noopener noreferrer">
+                Liskov, Barbara H.; Wing, Jeannette M. (1994). “A Behavioral Notion of Subtyping.” ACM Transactions on Programming Languages and Systems, 16(6), 1811–1841.
+              </a>
+            </li>
+            <li id="ref-7">
+              <a href="https://doi.org/10.1109/JPROC.2004.840301" target="_blank" rel="noopener noreferrer">
+                Frigo, Matteo; Johnson, Steven G. (2005). “The Design and Implementation of FFTW3.” Proceedings of the IEEE, 93(2), 216–231.
+              </a>
+            </li>
+          </ol>
+        </section>
+
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-c.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-cpp.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>
+9

@@ -1,97 +1,4 @@
 
-(() => {
-const article = document.querySelector('article');
-const tocNav = document.querySelector('#toc-nav');
-
-if (!article || !tocNav) return;
-
-// Change these if you want different heading levels.
-const headings = [...article.querySelectorAll('h2, h3')]
-    .filter(heading => !heading.closest('.references'));
-
-if (!headings.length) {
-    document.querySelector('.toc')?.remove();
-    return;
-}
-
-// Turn heading text into a URL-friendly ID.
-function slugify(text) {
-    return text
-    .toLowerCase()
-    .trim()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-');
-}
-
-// Make IDs unique, even if two headings have the same text.
-const usedIds = new Set();
-
-function uniqueId(text) {
-    const base = slugify(text) || 'section';
-    let id = base;
-    let n = 2;
-
-    while (usedIds.has(id) || document.getElementById(id)) {
-    id = `${base}-${n++}`;
-    }
-
-    usedIds.add(id);
-    return id;
-}
-
-headings.forEach(heading => {
-    if (!heading.id) {
-    heading.id = uniqueId(heading.textContent);
-    } else {
-    usedIds.add(heading.id);
-    }
-});
-
-const root = document.createElement('ul');
-let currentH2List = root;
-
-headings.forEach(heading => {
-    if (heading.tagName === 'H2') {
-    const li = document.createElement('li');
-    const link = document.createElement('a');
-
-    link.href = `#${heading.id}`;
-    link.textContent = heading.textContent.trim();
-
-    li.appendChild(link);
-
-    const subList = document.createElement('ul');
-    li.appendChild(subList);
-
-    root.appendChild(li);
-    currentH2List = subList;
-    } else {
-    // Don't create a top-level h3 if there was no preceding h2.
-    if (currentH2List === root) return;
-
-    const li = document.createElement('li');
-    const link = document.createElement('a');
-
-    link.href = `#${heading.id}`;
-    link.textContent = heading.textContent.trim();
-
-    li.appendChild(link);
-    currentH2List.appendChild(li);
-    }
-});
-
-// Remove empty h3 lists.
-root.querySelectorAll('ul').forEach(ul => {
-    if (!ul.children.length) ul.remove();
-});
-
-tocNav.appendChild(root);
-})();
-
-
 document.addEventListener("DOMContentLoaded", () => {
   const article = document.querySelector("article");
 
@@ -119,7 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
   toc.setAttribute("aria-label", "Table of contents");
 
   toc.innerHTML = `
-    <div class="toc-title">Contents</div>
+    <div class="toc-title">Table of Contents</div>
     <nav>
       <ul></ul>
     </nav>
@@ -155,33 +62,49 @@ document.addEventListener("DOMContentLoaded", () => {
     return id;
   }
 
-  let currentSublist = null;
+let currentSublist = null;
+let sectionNumber = 0;
+let subsectionNumber = 0;
 
-  filteredHeadings.forEach((heading) => {
-    // Give the heading an ID if it doesn't already have one.
-    if (!heading.id) {
-      heading.id = makeUniqueId(heading.textContent);
-    } else {
-      usedIds.add(heading.id);
-    }
+filteredHeadings.forEach((heading) => {
+  if (!heading.id) {
+    heading.id = makeUniqueId(heading.textContent);
+  } else {
+    usedIds.add(heading.id);
+  }
 
-    const link = document.createElement("a");
-    link.href = `#${heading.id}`;
-    link.textContent = heading.textContent.trim();
+  const isSection = heading.tagName === "H2";
 
-    const item = document.createElement("li");
-    item.appendChild(link);
+  // Skip H3 headings that appear before the first H2.
+  if (!isSection && !currentSublist) return;
 
-    if (heading.tagName === "H2") {
-      list.appendChild(item);
+  let number;
 
-      // Create a sub-list for following H3s.
-      currentSublist = document.createElement("ul");
-      item.appendChild(currentSublist);
-    } else if (heading.tagName === "H3" && currentSublist) {
-      currentSublist.appendChild(item);
-    }
-  });
+  if (isSection) {
+    sectionNumber++;
+    subsectionNumber = 0;
+    number = `${sectionNumber}.`;
+  } else {
+    subsectionNumber++;
+    number = `${sectionNumber}.${subsectionNumber}`;
+  }
+
+  const link = document.createElement("a");
+  link.href = `#${heading.id}`;
+  link.textContent = `${number} ${heading.textContent.trim()}`;
+
+  const item = document.createElement("li");
+  item.appendChild(link);
+
+  if (isSection) {
+    list.appendChild(item);
+
+    currentSublist = document.createElement("ul");
+    item.appendChild(currentSublist);
+  } else {
+    currentSublist.appendChild(item);
+  }
+});
 
   // Remove empty sub-lists.
   toc.querySelectorAll("ul").forEach((ul) => {

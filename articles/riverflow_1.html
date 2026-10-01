@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How RiverFlow's data loader language splits loading and preprocessing into five ordered sections, and what each section does inside the interpreter.">
+  <title>A small language for loading messy data · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+    <script src="../toc.js" defer></script>
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; max-width: 640px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+    .image-placeholder { box-sizing: border-box; display: grid; place-items: center; max-width: 640px; min-height: 280px; padding: 2rem; border: 1px dashed currentColor; text-align: center; opacity: .7; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">29 September 2026</time>
+        <h1>A small language for loading messy data</h1>
+
+        <p><em>RiverFlow data loader, part 1 of 2.</em> Next: <a href="riverflow_2.html">From columns to training pairs</a>.
+
+        <p>RiverFlow is a project which aims to forecast the water level of rivers in Northern Italy from their own recent history and from the weather upstream.
+        The river data is an hourly sensor export labelled <code>"Sesia @ Campertogno"</code>. The weather comes from eight stations in the valley, one daily CSV each: Cellio, Carcoforo, Lozzolo, Rima, Bocchetta delle Pisse, Alagna, Rassa and Boccioleto. No two station files have the same columns. The headers are in Italian, the decimals use commas (<code>2,6</code>), and the dates are written <code>11/08/2006</code> while the river uses <code>2018-03-22 02:00:00</code>.</p>
+
+        <p>Loading this with one Python script per experiment works for about a week. After that, the decisions that shape the dataset are spread across files: which columns count, how a gap is filled, what gets normalized, how far back a window reaches. So the repository has a small language for it instead. One file describes the whole path from raw CSV to a saved <code>.npz</code> of training pairs, and an interpreter written in Python runs it.</p>
+
+        <p>This series walks through that language using the code in the <a href="https://github.com/lorenzozz/RiverFlow">RiverFlow repository</a> <a href="#ref-1">[1]</a>. This first part covers the four sections that load and transform variables. <a href="riverflow-loader-2-plans.html">Part 2</a> covers the plans that turn variables into samples, and <a href="riverflow-loader-3-assumptions.html">part 3</a> covers the assumptions the interpreter makes about the data it receives.</p>
+
+        <h2>A file reads top to bottom, in five sections</h2>
+        <p>Every file (the examples use the extension <code>.makefile</code>, although GNU make is not involved) has five sections, always in this order: <code>.decl</code> declares sources, <code>.res</code> resolves types, <code>.act</code> transforms variables, <code>.sap</code> saves intermediate files and <code>.make</code> builds datasets. The interpreter's entry point is a straight pipeline, one method per section:</p>
+        <pre class="language-python"><code class="language-python">def interpret(self):
+    self.create_data()
+
+    self.parse_part_one()  # .decl
+    self.parse_part_two()  # .res
+    self.act()  # .act
+    self.parse_sap()  # .sap
+    self.parse_make()  # .make</code></pre>
+        <p><code>create_data()</code> reads the file and removes blank lines and lines that start with <code>#</code>. Each later stage locates its section with <code>self.rows.index('.res\n')</code> and similar calls, so every marker has to exist on its own line, even when the section is empty. The Iris example shows all five in about thirty lines (the paths are placeholders in the repository):</p>
+        <pre class="language-none"><code class="language-none">.decl
+source_file IrisData = "Your/Shuffled/Data/File"
+{SLength},{SWidth},{PLength},{PWidth},{Category}
+
+.res
+SLength: numeric
+SWidth: numeric
+PLength: numeric
+PWidth: numeric
+Category: categorical
+
+.act
+import numpy as np
+
+new length = np.size(SLength)
+new Indexes = np.arange(0, length)
+
+SLength = SLength - media(SLength)
+SWidth = SWidth - media(SWidth)
+PLength = PLength - media(PLength)
+PWidth = PWidth - media(PWidth)
+
+new Categories = da_categorico_a_numero(Category, {'Iris-setosa':0, 'Iris-versicolor':1, 'Iris-virginica':2})
+
+.sap
+
+save_file SaveScaled = "/Save/path"
+save "{SLength},{SWidth},{PLength},{PWidth}" into SaveScaled
+
+.make
+...</code></pre>
+        <p>The order is also the order of commitment. After <code>.decl</code> the interpreter knows which variables exist, after <code>.res</code> it knows what they are, and after <code>.act</code> their values are final. The rest of this post follows the same order.</p>
+
+        <h2>Declarations describe a row, not a schema</h2>
+        <p>A declaration is always two lines. The first names a source and gives its path. The second is a format string that describes one row of the file:</p>
+        <pre class="language-none"><code class="language-none">source_file MeteoCellio = EXAMPLESROOT + '/Meteo/CELLIO_giornalieri_2006_2022Pad.csv'
+{DataC};{PNoveC};{PZeroC};{TempAvgC};{TempMaxC};{TempMinC};
+
+source_file RiverFile = EXAMPLESROOT + '/River Height/sesia-hourly-packed-padded-aligned.csv'
+{RData};{VectorRH}</code></pre>
+        <p>The path after <code>=</code> is a Python expression. The interpreter evaluates it against the module dictionary of <code>Config.py</code>, which is where <code>EXAMPLESROOT</code> comes from:</p>
+        <pre class="language-python"><code class="language-python">path_statement = statement.split('=')[1].strip()
+file_path = eval(path_statement, FileDeclGetter.glob_env)</code></pre>
+        <p>The format string is split on braces. Names sit at odd positions and the literal text between them sits at even positions:</p>
+        <pre class="language-python"><code class="language-python">split_arg_list = [a for arg in arg_list.split('{') for a in arg.split('}')]
+
+variable_names = split_arg_list[1::2]
+
+self.formats[file_label] = split_arg_list[::2]
+self.files_arglists[file_label] = variable_names</code></pre>
+        <p>For <code>{DataC};{PNoveC};</code> this gives the names <code>DataC</code> and <code>PNoveC</code>, and the separators <code>''</code>, <code>';'</code> and <code>';'</code>. When a row is parsed, each separator is matched literally and the text before it becomes a value. The final separator decides what happens to the rest of the line. The Cellio file ends every row with a semicolon, so the format string ends with one too. The river file stores a whole bracketed list of 24 hourly readings in its second column, <code>[14.0, 12.0, 13.0, ...]</code>. Its format string ends with an empty separator, so the parser takes everything after the first semicolon as one value, commas included.</p>
+        <p>This is why the format string is more useful than a column list. It describes the row the way it looks on disk, and one parser handles semicolon files, comma files and embedded vectors. The Iris declaration uses commas, the station files use semicolons, and neither needs a flag.</p>
+        <p>Headers are handled by guessing. Before parsing, the interpreter reads two lines and asks <code>csv.Sniffer().has_header()</code> whether the first one looks like a header. The Python documentation describes this method as a heuristic <a href="#ref-2">[2]</a>, and it can be wrong for files whose first data row looks like text. None of the station files in the repository caused problems, but a declaration has no way to state "this file has a header", which would be more reliable.</p>
+
+        <h2>Resolution gives every column a type</h2>
+        <p>After <code>.decl</code>, all values are strings. The <code>.res</code> section assigns each variable one of four types, and the interpreter maps them onto NumPy dtypes:</p>
+        <pre class="language-python"><code class="language-python">recognized_v_types = {
+    "categorical": str,
+    "boolean": str,
+    "numeric": np.float64,
+    "integer": np.int32
+}</code></pre>
+        <p>A variable that is declared but not resolved keeps the placeholder type <code>"N/A"</code>, and loading it raises a <code>TypeError</code>. The large river example therefore types every column, including the ones it never uses. The file even labels them for the reader:</p>
+        <pre class="language-none"><code class="language-none"># ************ Fiume ************
+RData: categorical
+VectorRH: categorical
+
+# > Date di ogni meteo
+# !NOT PRESENT IN MODEL!
+DataC: categorical
+...
+PNoveC: numeric
+PZeroC: numeric</code></pre>
+        <p>Dates and the river vectors are <code>categorical</code> on purpose. A date stays a string so that it can be compared later, and the river vector stays a string until <code>.act</code> parses it. <code>.res</code> also accepts copies such as <code>Backup = PNoveC</code>, which make a deep copy of an already resolved variable.</p>
+        <p>The type conversion has one silent rule that matters for weather data. If a column does not convert, the interpreter replaces empty strings with <code>'0'</code> and tries again:</p>
+        <pre class="language-python"><code class="language-python">try:
+    self.variables[var_name] = np.array(py_data).astype(as_type)
+# Solve missing datapoint by just putting them equal to zero.
+except ValueError:
+    intermediate = np.array(py_data)
+    # Naive attempt to counter missing data, should be more modular
+    # in this sense.
+    intermediate[intermediate == ''] = '0'</code></pre>
+        <p>For a rainfall column, zero is a valid measurement, so a missing day becomes a dry day and nothing downstream can tell the difference. The comment in the code already flags this as naive. In practice the repository avoids the rule by padding the station files before the language sees them, with the <code>Pad.csv</code> files shown above. Part 3 looks at that padding in detail.</p>
+
+        <h2>Actions are Python in a controlled namespace</h2>
+        <p>The <code>.act</code> section is where the language stops being declarative. Each line is a Python expression that the interpreter runs with <code>eval()</code> in an environment that contains the resolved variables as NumPy arrays and a set of primitives. Most of the primitives have Italian names:</p>
+        <pre class="language-python"><code class="language-python">self.env = {
+    # Primitive functions
+    "discretizza": vec_discrete,
+    "aggiungi_rumore": vec_add_noise,
+    "da_categorico_a_numero": vec_bool_to_num,
+    "shuffle": vec_shuffle,
+    "media_zero": vec_zero_mean,
+    "media": vec_mean,
+    ...
+    "one_hot_encode": vec_one_hot,
+    "load_vec": vec_load,
+    "z_score":  vec_zscore,
+    "max_linear": vec_max_linear,
+    ...
+}
+# Enhance environment with user-defined variables.
+self.env.update(self.variables)</code></pre>
+        <p>Three rules keep this from turning into an ordinary script. First, a new name needs the keyword <code>new</code>. Assigning to an unknown name raises <code>NameError</code> on purpose, and the error handler uses <code>difflib.get_close_matches</code> to suggest the variable you probably meant, so a typo like <code>PNvoeC = z_score(PNoveC)</code> fails with a suggestion instead of creating a second variable:</p>
+        <pre class="language-python"><code class="language-python"># Enforce 'new' syntax.
+if ref_var not in self.env.keys():
+    raise NameError(ref_var)</code></pre>
+        <p>Second, imports are limited to <code>numpy</code>, <code>math</code> and <code>datetime</code>, with an optional alias. Third, every line must be an assignment or a <code>print(...)</code>, because variables are taken by value and an expression without assignment has no effect.</p>
+        <p>In the river examples, <code>.act</code> does the numeric preparation. It parses the bracketed strings into a 1839 × 24 array and standardizes every column:</p>
+        <pre class="language-none"><code class="language-none">.act
+
+VectorRH = load_vec(VectorRH, sep=',')
+
+VectorRH = z_score(VectorRH)
+PNoveC = z_score(PNoveC)
+PZeroC = z_score(PZeroC)
+TempMaxC = z_score(TempMaxC)</code></pre>
+        <p><code>z_score</code> flattens its input before computing the mean and standard deviation, so the 24 hourly columns share one mean and one scale. That keeps the relative shape of a day intact, which is the right choice for a vector of the same quantity measured every hour.</p>
+        <p>The primitives are thin NumPy wrappers, and some carry their sources. <code>interpola_outlier</code> points to the NIST/SEMATECH handbook page on outlier detection <a href="#ref-3">[3]</a>, which describes the modified z-score: the distance from the median, divided by the median absolute deviation (MAD). The implementation follows that test, but the replacement differs from its docstring:</p>
+        <pre class="language-python"><code class="language-python">a = np.copy(x)
+d = np.abs(a - np.median(a))
+m_dev = np.median(d)
+s = d / m_dev if m_dev else np.zero(len(d))
+a[s > m] = m * m_dev</code></pre>
+        <p>The docstring says outliers are "brought to the mean". The code sets them to <code>m * m_dev</code>, a positive spread value that is not centred on the data. Also, <code>np.zero</code> does not exist in NumPy (<code>np.zeros</code> does), so a column with a MAD of zero, such as a mostly dry rainfall series, raises <code>AttributeError</code>. None of the example files calls this primitive, which explains why these two problems went unnoticed.</p>
+        <p>One more detail matters when you write <code>.act</code> lines. The interpreter decides what a line is by searching for substrings: <code>'new '</code>, then <code>'import'</code>, then <code>'plot'</code>. A line such as <code>Subplot = x</code> contains <code>plot</code> and is sent to the plotting branch. Variable names need to avoid these words.</p>
+
+        <h2>Saving uses the same format strings as loading</h2>
+        <p>The <code>.sap</code> section writes variables back to text, and it reuses the declaration syntax in reverse. A format string with braces becomes the template of each output row. The interpreter refuses to save variables of different lengths into one file. The smallest complete pipeline in the repository uses only this section and the three before it:</p>
+        <pre class="language-none"><code class="language-none">.decl
+# Import each original IrisData data row as a whole
+source_file IrisData = "Your/Shuffled/Data/File"
+{IrisData}
+
+.res
+# Instruct the interpreter that IrisData[i] is a string
+IrisData: categorical
+
+.act
+new ShuffledData = shuffle(IrisData)
+
+.sap
+save_file SaveShuffled = "/your/save/path"
+save "{ShuffledData}" into SaveShuffled
+
+.make</code></pre>
+        <p>A format string with a single name and no separator reads the whole line as one value. <code>shuffle</code> permutes the lines and <code>save</code> writes them out unchanged, so every row keeps its fields together. The file exists because of something in the <code>.make</code> section: its train/test split is sequential. The Iris data is sorted by species. When I ran the main Iris file on the unshuffled data, all 44 test samples were <em>Iris virginica</em> <a href="#ref-4">[4]</a>. Part 2 shows where that split happens.</p>
+
+        <h2>What kind of language this is</h2>
+        <p>Martin Fowler separates external domain-specific languages, which have their own syntax and parser, from internal ones, which are written inside a host language <a href="#ref-5">[5]</a>. RiverFlow's loader language is both. <code>.decl</code>, <code>.res</code>, <code>.sap</code> and <code>.make</code> are external: fixed keywords, parsed line by line. <code>.act</code> and the file paths are internal: they are Python, evaluated by the host.</p>
+        <p>That split explains most of the design. The external sections hold the decisions that should be visible when you read the file: which columns, which types, which windows. The internal section holds the arithmetic, where a new keyword for every NumPy operation would add nothing. The cost is that a makefile is code, not configuration. The Python documentation notes that when the globals dictionary passed to <code>eval()</code> has no <code>__builtins__</code> key, Python inserts the built-in module <a href="#ref-6">[6]</a>. A makefile can therefore call <code>open()</code> or <code>__import__()</code> despite the import whitelist. That is acceptable for files you wrote yourself, and it means a makefile from someone else needs the same review as a script.</p>
+        <p>At the end of <code>.act</code>, each variable is a clean array with a type and a length. Nothing so far says what one training sample is. That is the job of the <code>.make</code> section, which is the subject of <a href="riverflow-loader-2-plans.html">part 2</a>.</p>
+
+      <section class="references" aria-labelledby="references-title">
+        <h2 id="references-title">References</h2>
+        <ol>
+          <li id="ref-1">
+            <a href="https://github.com/lorenzozz/RiverFlow" target="_blank" rel="noopener noreferrer">
+              Zani, Lorenzo. RiverFlow: forecasting and time-series analysis framework for hydrological data. GitHub repository. Sources quoted: src/DataOrganizer.py, src/VariableVectorAlgebra.py, src/VariableMath.py, examples/.
+            </a>
+          </li>
+          <li id="ref-2">
+            <a href="https://docs.python.org/3/library/csv.html#csv.Sniffer" target="_blank" rel="noopener noreferrer">
+              Python Software Foundation. “csv — CSV File Reading and Writing: Sniffer.has_header.” Python 3 documentation.
+            </a>
+          </li>
+          <li id="ref-3">
+            <a href="https://www.itl.nist.gov/div898/handbook/eda/section3/eda35h.htm" target="_blank" rel="noopener noreferrer">
+              NIST/SEMATECH. “Detection of Outliers.” e-Handbook of Statistical Methods, section 1.3.5.17.
+            </a>
+          </li>
+          <li id="ref-4">
+            <a href="https://archive.ics.uci.edu/dataset/53/iris" target="_blank" rel="noopener noreferrer">
+              Fisher, R. A. (1936). Iris [Dataset]. UCI Machine Learning Repository.
+            </a>
+          </li>
+          <li id="ref-5">
+            <a href="https://martinfowler.com/bliki/DomainSpecificLanguage.html" target="_blank" rel="noopener noreferrer">
+              Fowler, Martin. “DomainSpecificLanguage.” martinfowler.com (bliki).
+            </a>
+          </li>
+          <li id="ref-6">
+            <a href="https://docs.python.org/3/library/functions.html#eval" target="_blank" rel="noopener noreferrer">
+              Python Software Foundation. “Built-in Functions: eval().” Python 3 documentation.
+            </a>
+          </li>
+        </ol>
+      </section>
+
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-python.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>

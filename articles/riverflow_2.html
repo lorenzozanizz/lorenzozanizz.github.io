@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How the .make section of RiverFlow's data loader language turns aligned variables into windowed (x, y) training pairs, with the sample counts worked out by hand.">
+  <title>From columns to training pairs · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+    <script src="../toc.js" defer></script>
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; max-width: 640px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+    .image-placeholder { box-sizing: border-box; display: grid; place-items: center; max-width: 640px; min-height: 280px; padding: 2rem; border: 1px dashed currentColor; text-align: center; opacity: .7; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">29 September 2026</time>
+        <h1>From columns to training pairs</h1>
+
+        <p><em>RiverFlow data loader, part 2 of 3.</em> Previous: <a href="riverflow-loader-1-five-sections.html">A small language for loading messy data</a> · Next: <a href="riverflow-loader-3-assumptions.html">What the aligner assumes</a></p>
+
+        <p>At the end of <a href="riverflow-loader-1-five-sections.html">part 1</a>, every variable was a clean NumPy array: a column of rainfall values, a column of dates, a 1839 × 24 matrix of hourly river levels. A forecasting model needs something else. It needs samples, and each sample combines several variables over a stretch of time: the river over the last month, the rain over the last week and the next few days, and as target, the river over the coming week.</p>
+        <p>Building those samples by hand is where off-by-one errors live. The sources also start on different days. The Lozzolo weather station begins on 1 October 2001, the river series on 23 March 2018. Every window has to be measured from the same day in every file, and every sample has to have all its windows complete. The <code>.make</code> section describes this in a few lines, and its interpreter logs enough numbers that you can check the result by hand. This post does that check for three examples from the repository <a href="#ref-1">[1]</a>.</p>
+
+        <h2>A plan describes one sample around a moving day</h2>
+        <p>Here is the plan from <code>PlotData.makefile</code>, with its commented-out lines removed:</p>
+        <pre class="language-none"><code class="language-none">.make
+
+plan_file NewFile = EXAMPLESROOT + '/River Height/savefileN'
+plan_file TestFile = EXAMPLESROOT + '/River Height/testN'
+log_file Logs = EXAMPLESROOT + '/River Height/savefileN.txt'
+
+begin plan NewPlan expecting attempt_recovery
+{
+    align NormalizedRes, NormalizedResT against RData, RData as date with format %Y-%M-%D
+    align PNove against Data as date with format %Y-%M-%D
+    consider x
+
+    take 30 before x from NormalizedRes
+    take 7 before x and 6 after x from PNove
+
+    make NormalizedResT the target and take 6 after y from NormalizedResT
+    pair x and target
+}
+end plan
+
+split NewPlan into NewFile, TestFile as 75, 25
+compile NewPlan
+log NewPlan into Logs</code></pre>
+        <p>Read it as a description of one sample. <code>align</code> says which column gives each variable its position in time: the river variables are keyed by <code>RData</code>, the rainfall <code>PNove</code> (Italian "precipitazione dalle 9 alle 9", rain from 9:00 to 9:00) by <code>Data</code>. <code>consider x</code> introduces the moving day. Each <code>take</code> line then asks for a window relative to that day. <code>make ... the target</code> marks the variables that go into <code>y</code> instead of <code>x</code>. <code>NormalizedResT</code> is a copy of the normalized river series made in <code>.act</code>, because a variable can only have one window per plan.</p>
+        <p>The last three lines act on the finished plan. <code>split</code> assigns output files and proportions, <code>compile</code> builds the arrays and saves them, and <code>log</code> writes a description of the result. <code>pair x and target</code> reads well but does nothing: the parser only checks that <code>consider x</code> came before it. The pairing happens in any case.</p>
+        <p>The window statements are parsed by splitting on keywords:</p>
+        <pre class="language-python"><code class="language-python">if 'and' in statement:
+    request[0] = int(statement.split('take')[1].split('before')[0].strip())
+    request[1] = int(statement.split('and')[1].split('after')[0].strip())
+elif 'before' in statement:
+    request[0] = int(statement.split('take')[1].split('before')[0].strip())
+elif 'after' in statement:
+    request[1] = int(statement.split('take')[1].split('after')[0].strip())
+else:
+    self.aligner.singleton(var_name)
+    return
+
+self.aligner.wants(var_name, request)</code></pre>
+        <p>So a window is two integers, <code>[before, after]</code>. <code>take x from V</code> with no count is <code>[0, 0]</code>, one value per sample.</p>
+
+        <h2>Alignment finds a shared start, then counts rows</h2>
+        <p>When the parser reaches <code>consider x</code>, it builds an <code>Aligner</code> from all the <code>align</code> statements. The first job is to find where the sources overlap:</p>
+        <pre class="language-python"><code class="language-python">align_data = [self.var_vec.get_variable(var) for var in self.alignment]
+intersection = align_data[0]
+
+independent_vars = [self.var_vec.get_variable(var) for var in set(self.alignment)]
+for data in independent_vars:
+    intersection = intersection[np.in1d(intersection, data)]
+...
+bottom_aligns = [np.nonzero(data1 == intersection[0])[0][0] for data1 in align_data]
+self.init_align = max(bottom_aligns)</code></pre>
+        <p>The intersection holds the keys that appear in every alignment column. The aligner takes the first shared key, <code>23/03/2018</code> in the river example, and records at which row it appears in each source. From then on it works with row numbers only. Each variable gets a window, the range of rows inside the overlap, and a <em>budget</em>, the number of rows it has outside the overlap on each side.</p>
+        <p>The budget is what makes the counting interesting. When a variable asks for 7 days before <code>x</code>, the aligner first pays from that variable's budget. Only the part the budget cannot cover shrinks the usable range for every variable. In the plan above:</p>
+        <p>The river series starts on the first shared day, so its backward budget is zero. The 30-day history costs 30 samples. The Lozzolo series starts in 2001, so its budget before the overlap is thousands of rows, and the 7-day rain history costs nothing. At the other end, Lozzolo stops on 31 December 2022 and the river continues to 4 April 2023. The 6 days of future rain cost 6 samples, and the 6-day river target costs nothing.</p>
+        <p>This is the reason the design uses budgets instead of a plain intersection. A long history on one station does not have to be cut to the shortest file. Only the windows that actually reach past a file's edge reduce the dataset.</p>
+
+        <h2>Windows are sliding views over the aligned rows</h2>
+        <p>After alignment, each variable has a start row, an end row and a window. <code>get_convolution</code> trims the array to the usable range and hands it to NumPy:</p>
+        <pre class="language-python"><code class="language-python">slider = self.top_slide(var_name) + self.bot_slide(var_name) + 1
+# Trim data up to usable window in order to slide window over it and collect n samples
+trimmed_data = self.var_vec.get_variable(var_name)[l_bot:l_top]
+var = self.var_vec.get_variable(var_name)
+
+if not np.iterable(var[0]):
+    # Var is a 1-d numpy vector (var.ndim==1)
+    conv_data = np.lib.stride_tricks.sliding_window_view(trimmed_data, slider)
+else:
+    e_size = np.size(var[0])
+    views = np.lib.stride_tricks.sliding_window_view(trimmed_data, (slider, e_size))
+    conv_data = np.array([np.concatenate(*w) for w in views])</code></pre>
+        <p><code>sliding_window_view</code> returns every window of the requested shape as a view into the original array, without copying the data <a href="#ref-2">[2]</a>. For a variable whose elements are themselves vectors, such as the 24 hourly river readings, the window shape is <code>(days, 24)</code>. Each window is then flattened into one row. The <code>compile</code> step stacks the rows of all input variables side by side into <code>x</code>, and all target variables into <code>y</code>.</p>
+        <p>Note the <code>+ 1</code> in <code>slider</code>. A window includes day <code>x</code> itself, so <code>take 30 before x</code> produces 31 days, and <code>take 7 before x and 6 after x</code> produces 14.</p>
+
+        <h2>The logged numbers can be derived by hand</h2>
+        <p>I reran <code>PlotData.makefile</code> on the data in the repository. The log starts like this:</p>
+        <pre class="language-none"><code class="language-none">&gt; Changing field error to attempt_recovery
+&gt; Changing field proportions to [75, 25]
+&gt; Generated 1709 data points from input configuration
+&gt; Non target variables:['NormalizedRes', 'PNove'], Target variables: ['NormalizedResT']</code></pre>
+        <p>Here is where 1709 comes from. The overlap runs from 23 March 2018 to 31 December 2022, which is 1745 days. The 30-day river history removes 30 samples at the start and the 6 days of future rain remove 6 at the end: 1745 − 30 − 6 = 1709.</p>
+        <p>The widths follow from the windows. The river history contributes 31 days of 24 hours, 744 values. The rain window contributes 14 daily values. That makes 758 columns in <code>x</code>. The target is 7 days of 24 hours, 168 columns in <code>y</code>. The saved files match: <code>savefileN.npz</code> holds <code>x</code> with shape (1283, 758), <code>testN.npz</code> holds (426, 758).</p>
+        <p>The log also draws the layout of a sample. This is the part of the log that helps later, when you have to build an input for the trained model by hand:</p>
+        <figure>
+          <pre class="language-none"><code class="language-none">&gt; DATA FED INTO THE MODEL:
+
+&gt; | NormalizedRes              | PNove
+&gt; | 30 before x           X    | 7 before x           X    6 after x
+&gt; &lt;----&gt;  ..28.. &lt;----&gt; &lt;-^^-&gt; &lt;----&gt;  ..5.. &lt;----&gt; &lt;-^^-&gt; &lt;----&gt;  ..4.. &lt;----&gt;
+
+&gt; EXPECTED OUTPUT OF THE MODEL:
+
+&gt; | NormalizedResT
+&gt; | Y    6 after y
+&gt; &lt;-^^-&gt; &lt;----&gt;  ..4.. &lt;----&gt;</code></pre>
+          <figcaption>Layout section of the log written by <code>log NewPlan into Logs</code>.</figcaption>
+        </figure>
+        <p>The drawing makes one property of this plan visible. The target window starts at <code>Y</code>, the same day as <code>X</code>. Because windows include the current day, the river levels of day <code>x</code> appear in both the input and the target: 24 of the 168 target values are copies of input values. A model can learn to repeat them, which makes the error on the first day look better than the forecast is. The syntax has no offset keyword, so a target that starts on the next day needs a separately shifted variable prepared in <code>.act</code>.</p>
+
+        <h2>The split is sequential</h2>
+        <p><code>split NewPlan into NewFile, TestFile as 75, 25</code> does not shuffle. It cuts the arrays at a computed index:</p>
+        <pre class="language-python"><code class="language-python">props: list = self.specs['proportions']
+
+secs = np.ceil(np.cumsum(np.array(props[:-1]) / 100.0) * np.size(x_data, axis=0) + 1).astype(np.int32)
+x_s, y_s = np.split(x_data, secs), np.split(y_data, secs)</code></pre>
+        <p>For the river plan, the cut is at ⌈0.75 × 1709 + 1⌉ = 1283, which gives the 1283 training and 426 test samples above. The <code>+ 1</code> moves every cut by one or two samples, so the proportions are approximate. For 1709 samples this does not matter.</p>
+        <p>For a time series, a sequential split is the correct choice. Hyndman and Athanasopoulos describe the standard practice: the test set is the most recent part of the series, so that the evaluation looks like forecasting data the model has not seen <a href="#ref-3">[3]</a>. Here, the 426 test samples are the last 426 days of the aligned range.</p>
+        <p>For tabular data the same rule causes trouble. The Iris data is sorted by species. When I ran the Iris makefile on the unshuffled file, the log reported 150 samples and the split gave 106 for training and 44 for test. The 44 test samples were all <em>Iris virginica</em>, and the training set held only 6 of them. This is why the repository runs <code>shuffle_iris.makefile</code> first, as shown at the end of part 1.</p>
+
+        <h2>Windows on rows that are not time</h2>
+        <p>The breast cancer example shows what a window means when the rows are not ordered in time. It reads the Wisconsin breast cancer data <a href="#ref-4">[4]</a> <a href="#ref-5">[5]</a> after a shuffle, aligns everything on a row index, and asks for a window on one feature:</p>
+        <pre class="language-none"><code class="language-none">begin plan CancerPred expecting attempt_recovery
+{
+    align Thickness, CSize, CShape, MAdh against Indexes,Indexes,Indexes,Indexes as index
+    align SECS, BNuclei, BChrom, NorNucleoli, Mitoses against Indexes, Indexes, Indexes, Indexes, Indexes as index
+    align OHotTruth against Indexes as index
+
+    consider x
+    take x from Thickness
+    ...
+    take 4 before x from SECS
+    ...
+    make OHotTruth the target and take y from OHotTruth
+    pair x with target
+}
+end plan</code></pre>
+        <p>The mechanics work as before. The shuffled file has 697 rows. The 4-row window on <code>SECS</code> has no budget before the first index, so it costs 4 samples, and the log reports 693. The inputs are 8 single values plus a window of 5, 13 columns. The 30/70 split cuts at ⌈0.3 × 693 + 1⌉ = 209, and the saved arrays have shapes (209, 13) and (484, 13).</p>
+        <p>The meaning is another matter. After the shuffle, "4 before x" is the <code>SECS</code> value of four other, randomly chosen patients. The example demonstrates the syntax correctly, but the feature carries no information about patient <code>x</code>. A window is only meaningful when the alignment column orders the rows by something real, usually time.</p>
+
+        <h2>Normalization happens before the split</h2>
+        <p>The order of the sections has a consequence for the statistics. <code>z_score</code> runs in <code>.act</code>, before <code>.make</code> exists, so the mean and standard deviation come from the full series. In the river example, the scaling of the training data uses values from the test period. The scikit-learn documentation lists this as a standard form of data leakage: preprocessing must be fitted on the training data only <a href="#ref-6">[6]</a>. The effect on a long hydrological series is probably small, but it is not zero, and the language makes it easy to overlook because the split is written on the last line of the file.</p>
+        <p>Fixing this properly means the split has to be known before the normalization, for example by letting <code>.act</code> primitives read a training range from the plan. That is a change to the language, not to one makefile.</p>
+
+        <h2>A plan also carries settings</h2>
+        <p>Besides the statements above, a plan has a small dictionary of fields. <code>set</code> changes a field by name, with the value in double quotes. No example in the repository uses it, so these two lines only show the form the parser accepts:</p>
+        <pre class="language-none"><code class="language-none">set RNND x name = "inputs"
+set CancerPred fallback file = "fallback.npz"</code></pre>
+        <p><code>x name</code> and <code>y name</code> set the keys in the saved <code>.npz</code>. The <code>expecting</code> clause after <code>begin plan</code> sets the error mode. With <code>attempt_recovery</code>, a failed split writes all the data to the <code>fallback file</code> instead of stopping. Only <code>attempt_recovery</code> changes behaviour in the current code; <code>full_recovery</code>, used by the Iris example, is stored and logged but never read.</p>
+
+        <h2>Reproducing the numbers</h2>
+        <p>All runs in this post used NumPy 2.4.4. In that version, <code>np.in1d</code>, which the aligner calls, no longer exists, and <code>np.isin</code> is its replacement <a href="#ref-7">[7]</a>. I patched it at runtime with <code>np.in1d = np.isin</code> before loading the interpreter. The river run reproduced the log stored in the repository exactly. The breast cancer log stored next to the data reports 691 samples, two fewer than my run, so the counts above are from my run. For Iris I replaced the placeholder paths with the unshuffled <code>iris.data</code> file from the repository.</p>
+        <p>The aligner is small because of one decision: after it finds the first shared key, it trusts row numbers. That works only if every source has exactly one row per day and every source writes its keys in the same way. <a href="riverflow-loader-3-assumptions.html">Part 3</a> looks at what the repository does, outside the language, to make that true.</p>
+
+      <section class="references" aria-labelledby="references-title">
+        <h2 id="references-title">References</h2>
+        <ol>
+          <li id="ref-1">
+            <a href="https://github.com/lorenzozz/RiverFlow" target="_blank" rel="noopener noreferrer">
+              Zani, Lorenzo. RiverFlow. GitHub repository. Sources quoted: src/DatasetPlanner.py, src/DataOrganizer.py, examples/River Height/PlotData.makefile, examples/Breast Cancer/breast_cancer_treat_data.makefile, examples/Iris Dataset/iris.makefile.
+            </a>
+          </li>
+          <li id="ref-2">
+            <a href="https://numpy.org/doc/stable/reference/generated/numpy.lib.stride_tricks.sliding_window_view.html" target="_blank" rel="noopener noreferrer">
+              NumPy Developers. “numpy.lib.stride_tricks.sliding_window_view.” NumPy reference documentation.
+            </a>
+          </li>
+          <li id="ref-3">
+            <a href="https://otexts.com/fpp3/accuracy.html" target="_blank" rel="noopener noreferrer">
+              Hyndman, Rob J.; Athanasopoulos, George (2021). “Evaluating point forecast accuracy.” Forecasting: Principles and Practice, 3rd edition. OTexts.
+            </a>
+          </li>
+          <li id="ref-4">
+            <a href="https://archive.ics.uci.edu/dataset/15/breast+cancer+wisconsin+original" target="_blank" rel="noopener noreferrer">
+              Wolberg, William H. (1992). Breast Cancer Wisconsin (Original) [Dataset]. UCI Machine Learning Repository.
+            </a>
+          </li>
+          <li id="ref-5">
+            <a href="https://doi.org/10.1073/pnas.87.23.9193" target="_blank" rel="noopener noreferrer">
+              Wolberg, William H.; Mangasarian, O. L. (1990). “Multisurface method of pattern separation for medical diagnosis applied to breast cytology.” Proceedings of the National Academy of Sciences 87, 9193–9196.
+            </a>
+          </li>
+          <li id="ref-6">
+            <a href="https://scikit-learn.org/stable/common_pitfalls.html" target="_blank" rel="noopener noreferrer">
+              scikit-learn developers. “Common pitfalls and recommended practices: Data leakage.” scikit-learn documentation.
+            </a>
+          </li>
+          <li id="ref-7">
+            <a href="https://numpy.org/doc/stable/reference/generated/numpy.isin.html" target="_blank" rel="noopener noreferrer">
+              NumPy Developers. “numpy.isin.” NumPy reference documentation.
+            </a>
+          </li>
+        </ol>
+      </section>
+
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-python.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>

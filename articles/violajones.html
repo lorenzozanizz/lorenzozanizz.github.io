@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Exploring an online Python implementation of Viola–Jones and the clever ideas behind its fast face detector.">
+  <title>Viola-Jones | How we used to detect faces before neural networks · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+  <script src="../toc.js" defer></script>
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; max-width: 640px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-10-01">1 October 2026</time>
+        <h1>Viola-Jones | How we used to detect faces before neural networks</h1>
+	
+	<p> The years is 2004. Before neural networks, engineers had to be creative when detecting faces in footage and images. Since compute was scarce, efficiency was critical.</p>
+        <p>Viola–Jones is an early face-detection model that is still a beauty to study  <a href="#ref-3">[3]</a>  <a href="#ref-4">[4]</a>.
+Its speed was unparalled, and it came from several ideas working together. Firstly, it was a boosting algorithm: AdaBoost is used to turn a huge menu of simple visual tests into a compact classifier. Another ingredient are the filters: they describe local contrast and are simple enough to be generated synthetically. Last but not least, an integral image is computed, making  those tests extremely cheap to evaluate. A cascade then spends most of its effort rejecting easy background windows.</p>
+
+        <p>To study those ideas in depth, we'll be exploring a Python implementation I stumbled upon online: <a href="https://github.com/Donny-Hikari/Viola-Jones" target="_blank" rel="noopener noreferrer">Donny-Hikari/Viola-Jones</a>. The explanations below combine the repository’s code, its detection entry point and the original Viola–Jones papers.</p>
+
+        <h2>What the detector is looking for</h2>
+        <p>A face is not recognized from a single pixel or color. The classic Viola–Jones detector asks whether small rectangular regions have particular average brightness relationships. A two-rectangle filter, for example, subtracts the sum of pixels in one region from the sum in its neighbor. Other filters compare three or four regions. Several variations of those feature exists, but their effect is always similar to the features considered in the original paper.</p>
+        <p>These filters are often called Haar-like features because their patterns resemble Haar wavelets <a href="#ref-1">[1]</a>. The original method evaluates a very large set of candidate rectangles at different positions and sizes. During training, AdaBoost will selects a small set of useful tests and will combine them into a stronger classifier.</p>
+
+        <figure>
+          <img src="resources/violajones/haarlikefeatures.png" alt="Four diagrams of Haar-like features: left-right, top-bottom, three-stripe, and checkerboard rectangles">
+          <figcaption>Examples of rectangular contrast patterns. Each feature is a weighted difference between the pixel sums in its light and dark regions.</figcaption>
+        </figure>
+
+        <p>The filter design is part of the model’s appeal. Instead of asking a learned network to make up useful representation, introducing questions about interpretability, Viola–Jones starts with simple geometric patterns: perhaps a bright strip beside a dark strip, or a center band that differs from the bands around it. Such tests are easy to compute and can weakly respond to face structure, like the contrast between the eye region and cheeks. No one filter is a face detector by itself: the selected filters must work together to achieve an acceptable result.</p>
+
+        <h2>The integral image is a clever trick</h2>
+        <p>A straightforward rectangle filter would add up every pixel in each rectangle. While this would not be a problem for modern GPUs, in limited compute environments like CCTV or small camera edge processors that quickly adds up. Recomputing local sums wastes a lot of work: as hundreds of filter slide across an image and changes size, we may be repeating the same local sums hundreds if not thousands of times. Here comes the clever trick: use an integral image, also called a summed-area table, to store cumulative pixel sums. At each location, it records the sum of all pixels above and to the left.</p>
+
+        <p>Once that map is computed, any rectangular sum comes from four values at its corners. Subtract the two outer strips, then add back the overlap that was subtracted twice. So a small filter can get its rectangle sums in a ridicolously low fixed number of operations, whatever the rectangle’s area is. Note however that the map is not itself a set of pixel differences, rather it is a compact cache that makes those later differences fast and cheap.</p>
+
+        <figure>
+          <img src="resources/violajones/integralimage.jpeg" alt="A shaded rectangle in an integral image table with four corners labelled A, B, C, and D">
+          <figcaption>For a half-open rectangle, its sum is D − B − C + A. The four lookups are the key to fast Haar-like feature evaluation.</figcaption>
+        </figure>
+
+        <p>Here is a small NumPy example of the idea, which is not excerpt from the repository and is presented here for clarity. We add zero rows and columns to make the corner formula work cleanly for rectangles that touch the image boundary.</p>
+        <pre class="language-python"><code class="language-python">import numpy as np
+
+def integral_image(gray):
+    # ii[y, x] is the sum above and left of (x, y).
+    return np.pad(gray, ((1, 0), (1, 0))).cumsum(axis=0).cumsum(axis=1)
+
+def rectangle_sum(ii, x0, y0, x1, y1):
+    # Coordinates describe [x0:x1, y0:y1): right and bottom are excluded.
+    return ii[y1, x1] - ii[y0, x1] - ii[y1, x0] + ii[y0, x0]
+
+ii = integral_image(gray.astype(np.int64))
+left = rectangle_sum(ii, 10, 8, 18, 24)
+right = rectangle_sum(ii, 18, 8, 26, 24)
+left_right_feature = left - right</code></pre>
+
+        <p>For a two-rectangle filter, the response is one box sum minus the other. Three and four-rectangle features add or subtract more box sums, so that the price to compute a filter scales linearly in the number of uniform patches. The cumulative table is built once for each image window, and then every candidate filter gets its sums from a small number of array reads.</p>
+
+        <h2>Boosting turns many tests into a detector</h2>
+        <p>The feature space is clearly enormous, but most candidate tests are only extremely weakly informative for recognizing faces. AdaBoost repeatedly chooses a weak classifier that helps separate face windows from non-face windows, gives more weight to the examples it currently gets wrong, and combines the selected classifiers with learned weights. 
+Unlike models like random forests, boosting allows new entries to the flter collection to make up for the errors of its predecessors. 
+In this setting, a weak classifier can be a threshold on one feature response.</p>
+        <p>The useful detail is that boosting does two jobs at once: it trains a classifier and selects which visual features the classifier needs. The final decision focuses on a small, informative subset of the generated candidate filters. That is a beautiful coupling of learning and engineering: feature selection directly reduces the work at detection time.</p>
+
+        <h2>A cascade rejects easy negatives early</h2>
+	<p>Still, applying a large set of weak features to an image, even with the integral map trick, can become expensive fast. This is why Viola-Jones uses a cascade of increasingly discriminative filters. </p>
+        <p>The cascade orders classifiers in stages of varying difficulty. A window that fails a simple, early stage is discarded immediately. Only windows that look promising pay for the later, more demanding stages. Most windows in a typical image are background, so quickly rejecting them saves a great amount of compute.</p>
+        <p>The stages are tuned to keep nearly all face candidates while rejecting many non-faces at each step. Again, the same idea from boosting is present: while a single stage can be permissive and only weakly discard background patches, the concatenation of stages becomes selective. Surviving windows can overlap because a face may be found at nearby positions and scales, depending on the algorithm patch size setting, so a final grouping step can merge repeated detections.</p>
+
+        <figure>
+          <img src="resources/violajones/springernature.png" alt="A face frame is scanned with overlapping windows, passed through increasingly complex cascade stages, and overlapping face candidates are merged">
+          <figcaption>Conceptual detection flow: scan at several positions and scales, reject most windows early, then group overlapping survivors. Pictured is a more complicated pipeline embedding deep learning in the algorithm, reproduced from 
+            "Deep facial expression detection using Viola-Jones algorithm, CNN-MLP and CNN-SVM", Hadhami Aouani & Yassine Ben Ayed  <a href="#ref-2">[2]</a>.
+          </figcaption>
+        </figure>
+
+        <h2>Walking through the repository</h2>
+	<p>Having understood how Viola-Jones operates, we are ready to study the source code of the Python implementation in detail. The repository is due to user Donny-Hikary, and it implements the full Viola-Jones inference pipeline, from training to inference using webcam input. We'll see how the ingredients we discussed above combine together.  </p>
+
+	<h2>Walking through the repository</h2>
+<p>This is an online repository by Donny-Hikari that I found and am exploring here; it is not my project. It contains the feature code, the boosting and cascade code, a face detector, and a webcam script. Following those pieces in order makes it easier to see how the ideas from the first part of this article become a working detector.</p>
+
+<h3>Feature generation: the HaarlikeFeature class</h3>
+<p>The <a href="https://github.com/Donny-Hikari/Viola-Jones/blob/master/boostedcascade/haarlikefeature.py">HaarlikeFeature class</a> defines five feature types: two rectangles side by side, two stacked vertically, three side by side, three stacked vertically, and a four-rectangle diagonal pattern. Each feature compares the sums of its light and dark regions. For example, a two-rectangle feature responds to the difference between the left and right halves of its window. It does not need to recognize a face by itself; it gives a weak classifier a simple visual measurement to threshold.</p>
+<p>The class generates many such measurements by moving each pattern around the image and trying different sizes. That is the large menu of possible filters discussed earlier: the feature generator makes the candidates, and boosting later chooses a small useful subset. The patterns are deliberately simple, but their placement and scale let them measure things like a dark edge beside a light region or a broader change across the window.</p>
+<p>For speed, the code builds an integral image: a table whose entry at each position stores the sum of all pixels above and to the left. A rectangular sum can then be obtained from four table values:</p>
+<pre class="language-python"><code class="language-python">sum_rect = ii[y1, x1] - ii[y0, x1] - ii[y1, x0] + ii[y0, x0]</code></pre>
+<p>This is the clever trick: after the table is built, the number of lookups for a rectangle does not grow with the rectangle’s area. A feature made from several rectangles still needs only a few such sums. That makes it practical to evaluate a very large number of candidate features. The repository builds this table in <code>_getIntegralImage</code> and calculates feature responses in <code>_getFeatureIn</code>.</p>
+<p>There is an implementation detail to check carefully here. The feature descriptions store <code>w</code> and <code>h</code> as widths and heights, while <code>_getSumIn</code> indexes the integral image using its last two arguments as far-edge coordinates. Some calls pass values such as <code>w / 2</code> for those arguments. That appears to mix rectangle sizes with absolute coordinates, so the sums may not match the standard four-corner calculation for every feature. The intended feature mathematics is clear, but this part of the implementation deserves testing against a small hand-calculated image.</p>
+
+<h3>Boosting</h3>
+<p>The weak classifier in this repository is a decision stump: it picks one feature, one threshold, and one direction. In other words, it asks a question like “is this feature response greater than this threshold?” The <a href="https://github.com/Donny-Hikari/Viola-Jones/blob/master/boostedcascade/adaboost/decisionstump.py">decision-stump code</a> searches candidate thresholds and keeps the feature-and-threshold combination with the lowest weighted error.</p>
+<p>AdaBoost trains these stumps in sequence. After each one, it gives more weight to the training examples that were classified incorrectly, so the next stump has a reason to focus on them. Each stump’s vote is weighted by its error; lower-error stumps receive more influence. In the repository’s <a href="https://github.com/Donny-Hikari/Viola-Jones/blob/master/boostedcascade/adaboost/adaboost.py">AdaBoost code</a>, the vote weight follows the familiar expression:</p>
+<pre class="language-python"><code class="language-python">alpha = 0.5 * log((1 - error) / error)</code></pre>
+<p>This is where the huge feature menu becomes useful rather than overwhelming. The stump search can select among the generated features, and boosting combines the selected tests into a stronger classifier. The result is still built from simple measurements, but their sequence and weights let it express a more complicated decision.</p>
+
+<h3>The training loop</h3>
+<p>The repository’s cascade training code uses boosting to build a sequence of stages. Each stage is trained to reject as many non-face windows as it can while keeping its detection rate above a chosen target. A window rejected by an early stage does not need to be checked by later stages. This links the training procedure directly to the cascade’s computational efficiency: most background windows should be cheap to discard.</p>
+<p>The code also keeps validation examples aside while training. It measures each stage’s detection rate and false-positive rate on those examples, then adjusts the stage’s confidence threshold to retain the required fraction of faces. If false positives remain above the target, windows that still pass are kept as negative examples for the next stage. These are hard negatives: the examples that have already fooled the current cascade.</p>
+<pre class="language-python"><code class="language-python">while f1 > self.Ftarget:
+    # train a stage, measure its detection and false-positive rates,
+    # then keep the negative windows that still pass</code></pre>
+<p>The loop’s exact details live in <a href="https://github.com/Donny-Hikari/Viola-Jones/blob/master/boostedcascade/boostedcascade.py">BoostedCascade</a>. The point of the cascade is not that every window gets a sophisticated computation. It is that easy negatives are rejected early, leaving later stages to spend more work on the harder cases.</p>
+
+<h3>Merging proposed face rectangles into predictions</h3>
+<p>The detector scans many overlapping windows, so one face can produce several nearby rectangles. <a href="https://github.com/Donny-Hikari/Viola-Jones/blob/master/mergerect.py">mergerect.py</a> tries to consolidate these proposals. It compares each pair and computes their intersection. When that intersection covers enough of the smaller rectangle, the code treats the two detections as the same candidate.</p>
+<pre class="language-python"><code class="language-python">if overlap_area &gt;= min(area1, area2) * overlap_rate:
+    merged = average_coordinates(rect1, rect2)</code></pre>
+<p>This comparison is based on the area of the smaller rectangle, not the usual intersection-over-union score. That means a small rectangle contained inside a larger one can count as a strong overlap even if the larger rectangle extends well beyond it. The merged coordinates are averaged, rather than expanded to the outer boundary of both boxes. Each merge also combines the detections’ counts, and a result is kept only if it reaches <code>min_overlap_cnt</code>. In the webcam script, the settings are <code>overlap_rate=0.82</code> and <code>min_overlap_cnt=4</code>.</p>
+<p>This is a cleanup step after scanning, not another boosted-cascade stage. It turns clusters of window-level proposals into fewer face predictions, using both how much boxes overlap and how many detections contribute to a cluster.</p>
+
+<h3>Putting it together: the FaceDetector class</h3>
+<p>The <a href="https://github.com/Donny-Hikari/Viola-Jones/blob/master/facedetector.py">FaceDetector class</a> connects the classifier to a full image. It loads a trained model, creates an integral image at each scale, and makes a grid of candidate windows. Each window is passed through the cascade; rejected windows are dropped, and only survivors need to continue through the remaining stages.</p>
+<p>The class moves through scales by resizing the image and repeating the scan. A face can therefore be found at different sizes without changing the basic feature definitions. The detector also divides candidate windows into batches and uses worker processes to evaluate them. Parallelism can help with the many windows, while the cascade reduces the amount of work each window requires.</p>
+
+<h3>Inference: Webcam input</h3>
+<p>The <a href="https://github.com/Donny-Hikari/Viola-Jones/blob/master/detect.py">webcam script</a> shows how those pieces are used in a loop: read a frame, shrink it, convert it to grayscale, scan it at multiple scales, merge overlapping rectangles, and draw the remaining boxes.</p>
+<pre class="language-python"><code class="language-python">gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+faces, totalTiles = faceDetector.detect(
+    gray,
+    min_size=0.0,
+    max_size=0.3,
+    step=0.9,
+    detectPad=(2, 2),
+    verbose=True,
+    getTotalTiles=True,
+)
+
+faces = mergeRects(faces, overlap_rate=0.82, min_overlap_cnt=4)</code></pre>
+<p>Here, <code>step=0.9</code> controls how the image scale changes between scans, and <code>detectPad</code> sets the spacing between candidate windows. The minimum size is clamped inside the detector, so <code>min_size=0.0</code> does not mean it tests arbitrarily tiny windows. The scan returns detections in the coordinates of the image passed to <code>detect</code>.</p>
+<p>One coordinate detail is worth noticing when reading the display code: it enlarges the shrunken frame again before drawing the rectangles, but the shown loop does not appear to scale the rectangle coordinates by the same factor. The boxes may therefore be misaligned on the enlarged frame. That does not change the theory of the detector, but it is a reminder to check how image resizing affects coordinates at each step.</p>
+        <h2>Conclusion</h2>
+        <p>Viola–Jones is still interesting to study nowadays. Its former primacy came from a small set of good simplifications: describe local contrast with rectangular filters, use an integral image to compute their responses cheaply, let boosting keep only useful filters, and arrange the resulting classifiers so easy negatives exit early.
+ Each choice is understandable on its own, and together they made practical face detection possible on the hardware of their time.</p>
+<p>The original paper reported examples of the performance of algorithm on the historic 1927 Solvay Council shot. While its easy to be unimpressed with its performance if one has experience with modern deep learning, its still fantastic to see how accurate it can be. </p>
+        <p>The design is a useful lesson even for newer vision models: representation, learning, and compute strategy are meant to fit together neatly like a puzzle. A good model is not only about what it can recognize, but also about how much work it does to reach an answer.</p>
+
+        <section class="references" aria-labelledby="references-title">
+          <h2 id="references-title">References</h2>
+          <ol>
+            <li><a id="ref-1" href="https://en.wikipedia.org/wiki/Haar_wavelet" target="_blank" rel="noopener noreferrer">Haar Wavelets, Wikipedia</a></li>
+            <li><a id="ref-2" href="https://link.springer.com/article/10.1007/s13278-024-01231-y">Deep facial expression detection using Viola-Jones algorithm, CNN-MLP and CNN-SVM, Hadhami Aouani & Yassine Ben Ayed (2024)</a></li>
+            <li><a href="https://github.com/Donny-Hikari/Viola-Jones" target="_blank" rel="noopener noreferrer">Donny-Hikari, Viola-Jones repository</a> (README and <code>detect.py</code>).</li>
+            <li><a id="ref-4" href="https://doi.org/10.1109/CVPR.2001.990517" target="_blank" rel="noopener noreferrer">Paul Viola and Michael Jones, “Rapid Object Detection using a Boosted Cascade of Simple Features,” CVPR 2001.</a></li>
+            <li><a id="ref-3" href="https://doi.org/10.1023/B:VISI.0000013087.49260.fb" target="_blank" rel="noopener noreferrer">Paul Viola and Michael Jones, “Robust Real-Time Face Detection,” International Journal of Computer Vision, 2004.</a></li>
+          </ol>
+        </section>
+      </article>
+    </main>
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-python.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>

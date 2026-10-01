@@ -6,6 +6,8 @@
   <meta name="description" content="A small Lean experiment with Gödel-style diagonalization, self-reference, provability, and the limits of formal systems.">
   <title>Gödel and Lean: can we discuss formal language inside a formal language? · Blog</title>
   <link rel="stylesheet" href="../style.css">
+    <script src="../toc.js" defer></script>
+
 </head>
 <body>
   <div class="site">
@@ -14,16 +16,18 @@
     <main class="article-page">
       <article>
         <time datetime="2026-09-29">29 September 2026</time>
-        <h1>Gödel and Lean: can we discuss formal language inside a formal language?</h1>
+        <h1>Gödel and Lean: can we discuss a formal language inside a formal language?</h1>
 
         <p>
-          Lean is both a programming language and a theorem prover. That makes it a natural place to ask a slightly strange
+          Lean is both a programming language and a theorem prover <a href="ref-4">[4]</a>. That makes it a natural place to ask a slightly strange
           question: can we use one formal language to define another formal language, talk about proofs in that language,
           and then construct a sentence which, in some sense, talks about its own provability?
         </p>
 
         <p>
-          This is the territory of Gödel's incompleteness theorems. A full formalization is a serious project: one needs
+
+          This is the same idea that Gödel had around 1926. What followed was perhaps one of mathematic's most elegant and beautiful
+          theorems, Gödel's incompleteness theorems <a href="ref-1">[1]</a>. A full formalization of his proceeding is a serious endeavour: one needs
           an arithmetic theory, a coding of formulas and proofs by natural numbers, a formal proof predicate, substitution,
           representability results, and the diagonal lemma. Instead of reproducing all of that here, I want to build a
           deliberately small Lean model which captures the shape of diagonalization while being very explicit about what
@@ -31,48 +35,49 @@
         </p>
 
         <p>
-          The result is not a full proof of Gödel's theorem. It is a model of one of its central mechanisms:
+          The result is not a full reproduction of Gödel's construction. It is a model of one of its central mechanisms:
           constructing a formula <code>G</code> whose interpretation satisfies
           <code>G ↔ ¬Provable(G)</code>.
         </p>
 
-        <h2>First: what Gödel's theorem is actually about</h2>
+        <h2>More detail: what Gödel's theorem is actually about</h2>
 
         <p>
           Gödel's first incompleteness theorem concerns sufficiently expressive, effectively axiomatized formal theories.
-          Very roughly, once a consistent theory can express enough arithmetic, there are statements in its language that
-          it cannot settle. Modern presentations often use the diagonal lemma: for a formula <code>A(x)</code> with one
+          Very roughly, once a consistent theory can express enough arithmetic to be sufficiently expressive,
+           we have to admit statement in its language that
+          it cannot in any way settle. Modern presentations such as <a href="ref-6">[6]</a> <a href="ref-7">[7]</a> often use the diagonal lemma: for a formula <code>A(x)</code> with one
           free variable, one can construct a sentence <code>D</code> such that the theory proves
-          <code>D ↔ A(⌜D⌝)</code>, where <code>⌜D⌝</code> denotes a code for the syntax of <code>D</code>.
+          <code>D ↔ A(⌜D⌝)</code>, where <code>⌜D⌝</code> denotes a numerical code for the syntax of <code>D</code>. There is no single definition of a 
+          numerical code. The original construction in Gödel used prime number decomposition to encode symbols into numerical codes, and then into exponents for successive prime number.
         </p>
 
         <p>
           The Stanford Encyclopedia of Philosophy gives exactly this formulation of the
           <a href="https://plato.stanford.edu/entries/goedel-incompleteness/" target="_blank" rel="noopener noreferrer">diagonalization lemma</a>
-          and emphasizes an important point: this is a provable equivalence, not a magical sentence literally containing
-          itself as text. Its
+          and emphasizes the crucial point that codification is provable equivalence. Its
           <a href="https://plato.stanford.edu/Entries/goedel-incompleteness/sup2.html" target="_blank" rel="noopener noreferrer">supplement on diagonalization</a>
           explains the key operation in terms of substitution on Gödel codes.
         </p>
 
         <p>
-          For incompleteness, we eventually choose a property such as
-          <code>A(x) := ¬Prov(x)</code>. The resulting fixed point behaves like:
+          For incompleteness, we eventually need to choose a property such as
+          <code>A(x) := ¬Prov(x)</code> where x is a numerical code representing a statement in its own formal theory. The resulting fixed point (that is, an application of the predicate to its own code) behaves like:
         </p>
 
         <pre><code>G ↔ ¬Prov(⌜G⌝)</code></pre>
 
         <p>
-          Informally, people say that <code>G</code> "says that it is not provable". That phrase is useful, but it should
-          not be confused with the liar sentence <code>L ↔ ¬L</code>. Gödel's construction concerns provability in a
-          specified formal system, not direct negation of the sentence itself.
+          Informally, people use to say that the "egg proposition" <code>G</code> "states that it itself is not provable". This phrasing is useful, but it should
+          not be confused with the anti-tautology <code>L ↔ ¬L</code>. Gödel's construction concerns provability in a
+          specified formal system, and is not a direct negation of the sentence itself.
         </p>
 
         <h2>Lean lets us build a language as data</h2>
 
         <p>
           Lean is well suited to this experiment because we can represent the syntax of another language using inductive
-          datatypes. This is standard Lean: its documentation introduces
+          datatypes. This is standard Lean code: its documentation introduces
           <a href="https://lean-lang.org/theorem_proving_in_lean4/Inductive-Types/" target="_blank" rel="noopener noreferrer">inductive types</a>
           as the basic mechanism for constructing recursive datatypes, and its
           <a href="https://lean-lang.org/theorem_proving_in_lean4/Propositions-and-Proofs/" target="_blank" rel="noopener noreferrer">propositions-and-proofs chapter</a>
@@ -80,16 +85,13 @@
         </p>
 
         <p>
-          The first distinction to keep clear is therefore:
+          The first distinction to keep clear is therefore the one between Lean, which is the host language (metatheory), and our formula, which is the 
+          syntax of a tiny, toy language which is encoded inside Lean. 
         </p>
-
-        <pre><code>Lean                    -- the host language / metatheory
-└── MiniGodel.Formula   -- syntax of a tiny object language represented as Lean data</code></pre>
-
         <p>
           Our toy language will be intentionally tiny. It contains only falsehood, implication, and a predicate intended
-          to mean "the formula represented by this term is provable". Negation does not need to be primitive:
-          <code>¬P</code> can be represented as <code>P → ⊥</code>.
+          to mean "the formula represented by this term is provable". Negation does not need to be primitive, since
+          <code>¬P</code> can be represented as <code>P → ⊥</code>, where ⊥ is the falsehood symbol. 
         </p>
 
         <pre><code class="language-lean">namespace MiniGodel
@@ -112,9 +114,9 @@ def negF (p : Formula) : Formula :=
   .imp p .bot</code></pre>
 
         <p>
-          This already contains the biggest shortcut in the article: <code>quote</code> and <code>diag</code> are primitive
-          constructors in our toy syntax. In an actual Gödel proof, they are not free operations. Formulas and proofs are
-          encoded by natural numbers, and one has to show that the relevant operations on those codes are arithmetically
+          This already contains the biggest shortcut that we will take in this article: <code>quote</code> and <code>diag</code> are primitive
+          constructors in our toy syntax. In any exhaustive Gödel proof, they would not be free operations and would need a lengthy formalization. Formulas and proofs are
+          encoded by natural numbers in the Gödel construction, and one has to show that the relevant operations on those codes are arithmetically
           representable.
         </p>
 
@@ -127,8 +129,9 @@ def negF (p : Formula) : Formula :=
         <pre><code>A(x)</code></pre>
 
         <p>
-          Think of <code>x</code> as a slot into which we can place the code of a formula. If we can mechanically substitute
-          a formula's own code into such a slot, we can create a fixed point.
+          Think of <code>x</code> as a slot into which we can place the numerical code of a formula, almost like a function, except nothing is being computed, only discussed of.
+           If we can mechanically substitute
+          a formula's own code into such a slot, we can create a fixed point construction.
         </p>
 
         <p>
@@ -140,12 +143,13 @@ build a template δ(x)
 then form δ(⌜δ⌝)</code></pre>
 
         <p>
-          The clever part is arranging <code>δ</code> so that the code produced inside it refers to the final sentence.
-          The diagonal lemma guarantees that this can be done in sufficiently strong arithmetical theories.
+          The clever part is arranging our predicate <code>δ</code> so that the code produced inside it refers to the final sentence.
+          The diagonal lemma guarantees that this can be done in sufficiently strong arithmetical theories, 
+          and is the weakness that causes an infinite amount of admissible statements to remain unprovable inside said theory.
         </p>
 
         <p>
-          In our toy Lean model, I do not prove that arithmetic can perform this coding. I implement the operation directly.
+          In our toy Lean model, We will not prove that arithmetic can perform this coding. We implement the operation directly.
           First, substitution replaces the free syntax variable by another term:
         </p>
 
@@ -167,11 +171,11 @@ end</code></pre>
 
         <p>
           Notice that substitution does not enter <code>quote f</code>. Quoted syntax is treated as data. This is analogous
-          to the difference between a variable in a program and the same characters appearing inside a string literal.
+          to the difference between a variable in a program and the same characters appearing freely inside a string literal.
         </p>
 
         <p>
-          Now we give terms an interpretation. The interesting case is <code>diag</code>:
+          Now we give our terms an interpretation. The interesting case is that of <code>diag</code>:
         </p>
 
         <pre><code class="language-lean">def evalTerm (ρ : Formula) : Term → Formula
@@ -186,8 +190,9 @@ end</code></pre>
       substFormula (.quote f) f</code></pre>
 
         <p>
-          This definition is the toy version of diagonalization. Given a term denoting a formula <code>f</code>, it replaces
-          the free variable of <code>f</code> by the quotation of <code>f</code> itself.
+          This definition is the toy version of diagonalization. It is simple enough to be clear, and at the same time gives the full picture. 
+          Given a term denoting a formula <code>f</code>, it replaces
+          the free variable of <code>f</code> by the quotation (a numeric code) of <code>f</code> itself.
         </p>
 
         <p>
@@ -198,14 +203,14 @@ end</code></pre>
 
         <p>
           That is the self-application step. Again, in a real incompleteness proof this operation is encoded as arithmetic
-          on natural numbers. Here Lean simply computes it on syntax trees.
+          on natural numbers. Here Lean simply computes it on syntax trees internally.
         </p>
 
         <h2>Building the Gödel-shaped sentence</h2>
 
         <p>
           Next we give our formulas a semantics. The meaning of <code>Prov(t)</code> is supplied by an external Lean
-          predicate <code>Provable : Formula → Prop</code>:
+          predicate <code>Provable : Formula -> Prop</code>:
         </p>
 
         <pre><code class="language-lean">def Holds
@@ -223,7 +228,8 @@ end</code></pre>
       Provable (evalTerm ρ t)</code></pre>
 
         <p>
-          This is another major simplification. In a genuine Gödel formalization, provability is itself arithmetized:
+          This is yet another major simplification to keep our discussion simple.
+           In a genuine Gödel formalization, provability is itself arithmetized:
           one defines a relation such as <code>Proof_T(p, n)</code>, meaning that <code>p</code> codes a valid proof in the
           theory <code>T</code> of the sentence coded by <code>n</code>, and then:
         </p>
@@ -231,6 +237,9 @@ end</code></pre>
         <pre><code>Prov_T(n) := ∃ p, Proof_T(p, n)</code></pre>
 
         <p>
+          Note that while at first glance constructing such predicate seems incredibly complex, it is really not. The predicate does 
+          not ccreate a proof for the statement itself, yet it simply verifies if all provided steps are correct. In any sufficiently formal theory, this 
+          just corresponds to repeated applications of the theory's axioms and induction patterns, which is easy to imagine mechanically. 
           Our toy model skips that entire layer and lets Lean provide <code>Provable</code> from outside.
         </p>
 
@@ -248,7 +257,7 @@ end</code></pre>
         <pre><code>ψ(x) = ¬Prov(x)</code></pre>
 
         <p>
-          We then make the diagonal template:
+          We then make the diagonal template and get ready for diagonalization:
         </p>
 
         <pre><code class="language-lean">def delta : Formula :=
@@ -261,14 +270,14 @@ end</code></pre>
         <pre><code>δ(x) = ¬Prov(diag(x))</code></pre>
 
         <p>
-          Finally, substitute the quotation of <code>delta</code> into <code>delta</code> itself:
+          Finally, we are ready to substitute the quotation of <code>delta</code> inside <code>delta</code> itself:
         </p>
 
         <pre><code class="language-lean">def G : Formula :=
   substFormula (.quote delta) delta</code></pre>
 
         <p>
-          Lean can reduce the resulting syntax:
+          Inside Lean, we can reduce the resulting syntax:
         </p>
 
         <pre><code class="language-lean">theorem G_shape :
@@ -287,7 +296,7 @@ end</code></pre>
   rfl</code></pre>
 
         <p>
-          Therefore, under our semantics, <code>G</code> has exactly the fixed-point property we wanted:
+          Therefore, under our semantics, <code>G</code> has exactly the fixed-point property we wanted for our construction:
         </p>
 
         <pre><code class="language-lean">theorem godel_spec
@@ -297,13 +306,15 @@ end</code></pre>
   rfl</code></pre>
 
         <p>
-          The fact that this proof is just <code>rfl</code> is not evidence that Gödel's theorem is trivial. It means that
+          Note that the fact that this proof is just <code>rfl</code> is not evidence that Gödel's theorem is trivial. It means that
           we deliberately designed the toy syntax and its <code>diag</code> operator so that the fixed-point equation is
-          true by computation. The difficult theorem that Gödel proves is that ordinary arithmetic can encode enough
-          syntax and computation to obtain the same effect without a built-in <code>diag</code> instruction.
+          true by computation.
+          The real genius and novelty in Gödel's construction is that he proves that ordinary arithmetic can encode enough
+          syntax and computation to obtain the same effect without a built-in <code>diag</code> instruction. That effort alone is what makes him 
+          one of the greatest logicians to ever live. 
         </p>
 
-        <h2>Why this is not a contradiction</h2>
+        <h2>Why is there no contradiction?</h2>
 
         <p>
           Our sentence has the form:
@@ -312,14 +323,16 @@ end</code></pre>
         <pre><code>G ↔ ¬Provable(G)</code></pre>
 
         <p>
-          It does <em>not</em> have the form:
+          It is important to note that the sentence does <em>not</em> have the form:
         </p>
 
         <pre><code>G ↔ ¬G</code></pre>
 
         <p>
-          The distinction between truth and provability is the whole point. A statement can fail to have a proof in a
-          particular theory without being false.
+          The distinction between truth and provability is the entire point of our construction. A statement can fail to have a proof in a
+          particular theory without being false. This is the case for examples for the infamous Axiom of Choice (AOC): it can be shown that inside 
+          the very common Zermelo-Fraenkel set theory at the basis of modern real analysis, AOC cannot be proven or disproved in any way. Both its negation and adfirmation are consistent in ZF. 
+
         </p>
 
         <p>
@@ -328,15 +341,14 @@ end</code></pre>
           that <code>G</code> is not provable. So, under that soundness assumption, <code>G</code> cannot be proved.
         </p>
 
-        <pre><code>assume Provable(G)
-        ↓
+        <pre><code>assume Provable(G) ->
 soundness
-        ↓
+        ->
 G
-        ↓
+        ->
 meaning of G
-        ↓
-¬Provable(G)</code></pre>
+        ->
+¬Provable(G) -> contradiction!</code></pre>
 
         <p>
           This is enough to illustrate the tension, but it is not the standard first incompleteness theorem in its full
@@ -344,30 +356,10 @@ meaning of G
           normally used in Gödel or Rosser incompleteness results.
         </p>
 
-        <h2>What has been implemented, and what has not</h2>
+        <h2>What we shows and what we did nott</h2>
 
         <p>
-          The experiment really does implement syntax trees, substitution, quotation, a diagonal/self-substitution
-          operation, a semantics for the tiny language, and a fixed point whose interpretation is
-          <code>G ↔ ¬Provable(G)</code>.
-        </p>
-
-        <p>
-          But the following parts are intentionally missing:
-        </p>
-
-        <ul>
-          <li>Gödel numbering of formulas as natural numbers;</li>
-          <li>an actual arithmetic theory such as Peano Arithmetic;</li>
-          <li>coding of finite proofs as natural numbers;</li>
-          <li>an arithmetized predicate <code>Proof_T(p, n)</code>;</li>
-          <li>a proof that substitution and proof checking are representable in arithmetic;</li>
-          <li>a derivation of the diagonal lemma from those arithmetic encodings;</li>
-          <li>the full hypotheses and conclusion of Gödel's or Rosser's incompleteness theorem.</li>
-        </ul>
-
-        <p>
-          In other words, the toy system makes the central syntactic operation primitive:
+          OUr te toy system makes the central syntactic operation primitive:
         </p>
 
         <pre><code>toy model                     full Gödel construction
@@ -378,29 +370,16 @@ diag                      →   encoded substitution function
 Provable : Formula → Prop →   ∃ p, Proof_T(p, n)</code></pre>
 
         <p>
-          The full theorem is remarkable precisely because the right-hand column can be constructed using arithmetic
+          The full theorem is remarkable because all the constructs that we took for granted were constructed using arithmetic
           itself.
         </p>
 
         <h2>So, can a formal language discuss a formal language?</h2>
 
         <p>
-          Yes, but there are several levels that should not be collapsed into one.
+          The answer is yes, but there are several levels that should not be collapsed into one. We used Lean to define and reason about
+          the syntax of a toy language, which contained expressions like <code>Prov(t)</code> which we interpret using a provability predicate. 
         </p>
-
-        <pre><code>Lean
-│
-│  defines and reasons about
-▼
-syntax of our object language
-│
-│  contains expressions such as
-▼
-Prov(t)
-│
-│  which we interpret using
-▼
-a proof relation / provability predicate</code></pre>
 
         <p>
           Lean is not confused by this. From Lean's perspective, our formulas are ordinary inductive data. Functions such
@@ -447,12 +426,10 @@ a proof relation / provability predicate</code></pre>
 
         <p>
           That mechanism does not make the formal system explode in contradiction. Instead, under the relevant hypotheses,
-          it exposes a gap between two notions that are easy to conflate:
+          it exposes a gap between two notions that are easy to conflate: truth in the intended interpretation
+            is not 
+provability inside a particular formal theory
         </p>
-
-        <pre><code>truth in the intended interpretation
-            ≠
-provability inside a particular formal theory</code></pre>
 
         <p>
           Our Lean model only sketches that boundary. But even the sketch is useful because every layer is explicit:
@@ -460,33 +437,44 @@ provability inside a particular formal theory</code></pre>
           and the fixed-point property is a theorem that Lean checks.
         </p>
 
-        <p>
-          The part we cheated on is also completely visible. We handed the toy language quotation and diagonalization
-          directly. Gödel's theorem earns its depth by showing how to reconstruct those capabilities through arithmetic
-          coding instead.
-        </p>
-
         <h2>References</h2>
 
         <ul>
+
+          <li>
+            <a id="ref-1" href="https://plato.stanford.edu/entries/goedel-incompleteness/" target="_blank" rel="noopener noreferrer">
+              On Formally Undecidable Propositions of Principia Mathematica and Related Systems
+, Kurt Gödel (1931)
+            </a>
+          </li>
           <li>
             <a href="https://plato.stanford.edu/entries/goedel-incompleteness/" target="_blank" rel="noopener noreferrer">
-              Stanford Encyclopedia of Philosophy — Gödel's Incompleteness Theorems
+              Stanford Encyclopedia of Philosophy | Gödel's Incompleteness Theorems
             </a>
           </li>
           <li>
             <a href="https://plato.stanford.edu/Entries/goedel-incompleteness/sup2.html" target="_blank" rel="noopener noreferrer">
-              Stanford Encyclopedia of Philosophy — The Diagonalization Lemma
+              Stanford Encyclopedia of Philosophy | The Diagonalization Lemma
             </a>
           </li>
           <li>
             <a href="https://lean-lang.org/theorem_proving_in_lean4/Propositions-and-Proofs/" target="_blank" rel="noopener noreferrer">
-              Theorem Proving in Lean 4 — Propositions and Proofs
+              Theorem Proving in Lean 4 | Propositions and Proofs
             </a>
           </li>
           <li>
-            <a href="https://lean-lang.org/theorem_proving_in_lean4/Inductive-Types/" target="_blank" rel="noopener noreferrer">
-              Theorem Proving in Lean 4 — Inductive Types
+            <a id="ref-5" href="https://lean-lang.org/theorem_proving_in_lean4/Inductive-Types/" target="_blank" rel="noopener noreferrer">
+              Theorem Proving in Lean 4 | Inductive Types
+            </a>
+          </li>
+          <li>
+            <a id="ref-6" href="https://lean-lang.org/theorem_proving_in_lean4/Inductive-Types/" target="_blank" rel="noopener noreferrer">
+              "An Introduction to Gödel's Theorems", Peter Smith (2005)
+            </a>
+          </li>
+          <li>
+            <a id="ref-7" href="https://en.wikipedia.org/wiki/G%C3%B6del,_Escher,_Bach/" target="_blank" rel="noopener noreferrer">
+              "Gödel, Escher, Bach" Douglas Hofstadter (1979)
             </a>
           </li>
           <li>
