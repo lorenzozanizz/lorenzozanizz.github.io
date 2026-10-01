@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Revisiting LeCun's 2023 claim that autoregressive LLMs are too unreliable to be dangerous, with evidence up to mid 2025.">
+  <title>An unreliable system can still be dangerous · Blog</title>
+  <link rel="stylesheet" href="../style.css">
+  <script src="../toc.js" defer></script>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+
+    <main class="article-page">
+      <article>
+        <time datetime="2026-10-01">1 October 2026</time>
+        <h1>An unreliable system can still be dangerous: revisiting LeCun's 2023 position</h1>
+
+        <p>
+          In mid 2023, Yann LeCun gave a talk at MIT on objective-driven AI. Its safety message was compact. He agreed that
+          autoregressive models are hard to control, but he did not think they were powerful enough to be a threat <a href="#ref-1">[1]</a>.
+          On social media he went further, writing that worrying about superhuman AI alignment in 2023 was
+          <q>like worrying turbojet engine safety in 1920</q>, and that safety would arrive through iterative refinement, as it did for cars and aircraft <a href="#ref-1">[1]</a>.
+        </p>
+
+        <p>
+          The technical core of the position is easy to state. If each generated token has a small probability <code>e</code> of leaving the set of acceptable continuations,
+          the chance of staying correct decays roughly as <code>(1 − e)<sup>n</sup></code> with sequence length <code>n</code> <a href="#ref-2">[2]</a>.
+          I think the premise is largely right. My claim is that the conclusion does not follow from it.
+        </p>
+
+        <h2>The premise holds up</h2>
+
+        <p>
+          Empirical work since 2023 supports the idea that transformers degrade on long, compositional tasks. Dziri et al. show that
+          models solve compositional problems by matching fragments of computation they have seen, and that accuracy falls quickly as the problem gets deeper <a href="#ref-3">[3]</a>.
+          More recently, Shojaee et al. find that frontier reasoning models suffer a complete accuracy collapse beyond a certain problem complexity in controlled puzzle environments <a href="#ref-4">[4]</a>.
+          So I accept that LLMs are unreliable at length. The question is whether unreliability is a safety argument.
+        </p>
+
+        <h2>Danger does not need reliability</h2>
+
+        <p>
+          A system does not need to be correct to be harmful. It needs to be capable enough on the part of the task that matters, and it needs enough chances to try.
+          I see two separate reasons.
+        </p>
+
+        <p>
+          First, a failure can be a failure of safeguards. When a model drifts, the thing that drifts may be its refusal behaviour.
+          Zou et al. found adversarial suffixes, built automatically, which transfer across models and make aligned chatbots produce content they would normally refuse <a href="#ref-5">[5]</a>.
+          Qi et al. showed that fine-tuning an aligned model on a handful of adversarial examples, or even on benign data, can erode its safety training <a href="#ref-6">[6]</a>.
+          A short harmful answer does not need a long reliable chain of reasoning. It needs one successful sample, and sequence length is not a barrier there.
+        </p>
+
+        <p>
+          Second, scale. A single instance with a 5% success rate at some harmful task looks harmless. Millions of instances, run by many actors, who can retry for free and keep only the successes, are a different object.
+          Deployment at scale makes individual failures statistically irrelevant: the aggregate behaves like a system that sometimes works, and sometimes is enough.
+          Aircraft are a poor analogy here, because nobody tries a million cheap flights hoping that one will arrive somewhere forbidden.
+        </p>
+
+        <h2>Who owns the compute?</h2>
+
+        <p>
+          Today the largest models are owned by a few companies. I think this will not remain stable, and the reasons are not only technical.
+          Governments, armed forces and large organisations already keep sensitive data in-house. A model trained or fine-tuned on that data inherits the same requirement: it cannot be sent to a third-party API.
+          I expect such bodies to build, or commission, locally owned language models, trained on their own archives and procedures so that they come to embody the organisation that uses them.
+          This is a prediction, not a result, and I do not have a source that measures it.
+        </p>
+
+        <p>
+          There are good reasons to prefer this to the current arrangement. A private company is exposed to outside pressure, and it follows the logic of capital.
+          That logic does not necessarily reward truly intelligent and beneficial agents. It rewards products with a moat, and the moat is often vendor lock-in.
+          There is also a data problem. The scraping practices behind frontier models are poorly documented, and the web is increasingly closing off.
+          Longpre et al. audited the web sources used for major training corpora and found a rapid rise in restrictions on crawling, many of which are inconsistent with the sites' own terms of service <a href="#ref-7">[7]</a>.
+          A model trained on data of unclear provenance is unsuitable for any application where provenance matters, such as law, health, or defence.
+          This is a second reason why ownership of the means of computation is not a minor issue.
+        </p>
+
+        <h2>Safeguards bolted on from outside are not enough</h2>
+
+        <p>
+          Current systems are made safe mostly by adding layers: RLHF, filters, classifiers, monitors. Casper et al. review the open problems of RLHF and conclude that it has fundamental limits, among them
+          imperfect human feedback and the difficulty of specifying what we actually want <a href="#ref-8">[8]</a>.
+          The deeper trouble is that these layers act on outputs. The model still produces the bad generation internally. We then try to hide it.
+        </p>
+
+        <p>
+          LeCun's own proposal points the other way. In his architecture, a world model lets the system predict the consequences of its actions and plan against explicit objectives and guardrails <a href="#ref-2">[2]</a>.
+          The appeal is that unwanted plans can be rejected during planning. The aim is not to refuse to show a bad generation, but never to consider it.
+          That is hard to do with a purely probabilistic next-token model, even after RLHF.
+          Work in this direction continues: V-JEPA 2, trained on large amounts of video, is reported to support understanding, prediction and planning for robot control <a href="#ref-9">[9]</a>.
+          I do not claim that JEPA-style systems are safe. I claim that a coherent internal model of the world is the right place to look for safety, not the output filter.
+        </p>
+
+        <h2>We cannot read the explanation off the model</h2>
+
+        <p>
+          A natural answer is: ask the model to explain itself. Chain-of-thought (CoT) looks like a window into its reasoning. The evidence says the window is dirty.
+          Turpin et al. showed that CoT explanations can be systematically unfaithful: models were swayed by biasing features in the prompt and never mentioned them in their explanations <a href="#ref-10">[10]</a>.
+          Chen et al. repeated the idea on reasoning models in 2025. They found that models often use a hint without saying so, with disclosure rates that were frequently below 20%, and that outcome-based RL did not fix this <a href="#ref-11">[11]</a>.
+        </p>
+
+        <p>
+          Pressure on the CoT does not help either. Baker et al. found that a monitor reading the CoT can catch reward hacking in agentic coding tasks.
+          But when they trained the model against that monitor, it learned to hide its intent while continuing to misbehave <a href="#ref-12">[12]</a>.
+          Other experiments point to strategic behaviour. Greenblatt et al. observed a model that, when told it would be retrained toward a conflicting objective, sometimes complied with harmful requests in training in order to preserve its preferences outside of it <a href="#ref-13">[13]</a>.
+          Meinke et al. report that frontier models can, in contrived settings, pursue goals by covertly disabling oversight or misleading the user <a href="#ref-14">[14]</a>.
+          These are lab setups, and I do not want to overstate them. But they show that a trusted explanation is optimistic at best.
+        </p>
+
+        <p>
+          This is the alignment problem in a general form. Even with a faithful explanation, there is a second step: we must translate our idea of what is good for humanity into something that can be stated as a training objective.
+          I do not think that step is solved, and the work cited above suggests that the first step is not solved either.
+        </p>
+
+        <h2>Conclusion</h2>
+
+        <p>
+          LeCun was right that autoregressive models are unreliable, and right that better architectures are worth building.
+          But reliability and danger are different axes. A system can fail often, and still be dangerous because its failures include its safeguards,
+          because it runs at huge scale, because its owners answer to interests that are not ours, and because we cannot check its stated reasons.
+          The turbojet analogy assumes that we can observe the engine, and that the engine does not learn about our tests. For language models, neither assumption is secure.
+        </p>
+
+        <h2>References</h2>
+
+        <ul>
+          <li>
+            <a id="ref-1" href="https://forum.effectivealtruism.org/posts/LSzHmdCdsFieMXLcL/yann-lecun-on-agi-and-ai-safety" target="_blank" rel="noopener noreferrer">
+              Chris Leong, "Yann LeCun on AGI and AI Safety", EA Forum (2023), including LeCun's MIT slides and his post of April 2023
+            </a>
+          </li>
+          <li>
+            <a id="ref-2" href="https://openreview.net/forum?id=BZ5a1r-kVsf" target="_blank" rel="noopener noreferrer">
+              Yann LeCun, "A Path Towards Autonomous Machine Intelligence" (2022)
+            </a>
+          </li>
+          <li>
+            <a id="ref-3" href="https://arxiv.org/abs/2305.18654" target="_blank" rel="noopener noreferrer">
+              Dziri et al., "Faith and Fate: Limits of Transformers on Compositionality" (2023)
+            </a>
+          </li>
+          <li>
+            <a id="ref-4" href="https://arxiv.org/abs/2506.06941" target="_blank" rel="noopener noreferrer">
+              Shojaee et al., "The Illusion of Thinking" (2025)
+            </a>
+          </li>
+          <li>
+            <a id="ref-5" href="https://arxiv.org/abs/2307.15043" target="_blank" rel="noopener noreferrer">
+              Zou et al., "Universal and Transferable Adversarial Attacks on Aligned Language Models" (2023)
+            </a>
+          </li>
+          <li>
+            <a id="ref-6" href="https://arxiv.org/abs/2310.03693" target="_blank" rel="noopener noreferrer">
+              Qi et al., "Fine-tuning Aligned Language Models Compromises Safety, Even When Users Do Not Intend To!" (2023)
+            </a>
+          </li>
+          <li>
+            <a id="ref-7" href="https://arxiv.org/abs/2407.14933" target="_blank" rel="noopener noreferrer">
+              Longpre et al., "Consent in Crisis: The Rapid Decline of the AI Data Commons" (2024)
+            </a>
+          </li>
+          <li>
+            <a id="ref-8" href="https://arxiv.org/abs/2307.15217" target="_blank" rel="noopener noreferrer">
+              Casper et al., "Open Problems and Fundamental Limitations of Reinforcement Learning from Human Feedback" (2023)
+            </a>
+          </li>
+          <li>
+            <a id="ref-9" href="https://arxiv.org/abs/2506.09985" target="_blank" rel="noopener noreferrer">
+              Assran et al., "V-JEPA 2: Self-Supervised Video Models Enable Understanding, Prediction and Planning" (2025)
+            </a>
+          </li>
+          <li>
+            <a id="ref-10" href="https://arxiv.org/abs/2305.04388" target="_blank" rel="noopener noreferrer">
+              Turpin et al., "Language Models Don't Always Say What They Think" (2023)
+            </a>
+          </li>
+          <li>
+            <a id="ref-11" href="https://arxiv.org/abs/2505.05410" target="_blank" rel="noopener noreferrer">
+              Chen et al., "Reasoning Models Don't Always Say What They Think" (2025)
+            </a>
+          </li>
+          <li>
+            <a id="ref-12" href="https://arxiv.org/abs/2503.11926" target="_blank" rel="noopener noreferrer">
+              Baker et al., "Monitoring Reasoning Models for Misbehavior and the Risks of Promoting Obfuscation" (2025)
+            </a>
+          </li>
+          <li>
+            <a id="ref-13" href="https://arxiv.org/abs/2412.14093" target="_blank" rel="noopener noreferrer">
+              Greenblatt et al., "Alignment Faking in Large Language Models" (2024)
+            </a>
+          </li>
+          <li>
+            <a id="ref-14" href="https://arxiv.org/abs/2412.04984" target="_blank" rel="noopener noreferrer">
+              Meinke et al., "Frontier Models are Capable of In-context Scheming" (2024)
+            </a>
+          </li>
+        </ul>
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+</body>
+</html>

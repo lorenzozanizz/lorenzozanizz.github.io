@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A small Lean experiment with Gödel-style diagonalization, self-reference, provability, and the limits of formal systems.">
+  <title>Do LLMs display P300? A neuroscience perspective of surprise for language models - upcoming · Blog</title>
+  <link rel="stylesheet" href="../style.css">
+    <script src="../toc.js" defer></script>
+
+</head>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+
+    <main class="article-page">
+      <article>
+ <time datetime="2026-10-01">1 October 2026</time>
+
+<h1>Do LLMs display P300? A neuroscience perspective of surprise for language models - upcoming</h1>
+
+<p class="dek">When the brain encounters something unexpected, its response does not end at recognizing that the event was unlikely. Unexpected events can produce a transient change in neural activity, including the well-known P300 event-related potential. An upcoming project will ask whether an analogous phenomenon can be defined inside large language models: does surprise briefly change how strongly internal representations are updated, and how does that change propagate through the model?</p>
+
+<p>In neuroscience, the P300 is a positive event-related potential associated with unexpected or task-relevant events. Its interpretation is not simply “the brain detected a low-probability stimulus”: theories of the P300 also connect it to attention and to updating an internal representation of the current context.<sup><a href="#ref-polich" aria-label="Reference 1">[1]</a></sup><sup><a href="#ref-donchin" aria-label="Reference 2">[2]</a></sup></p>
+
+<p>This raises an interesting question for language models. An autoregressive LLM already assigns a probability to the next token. If the observed token is \(x_t\), its surprise can be written in the usual information-theoretic form:</p>
+
+<div class="equation">\[
+S_t=-\log p(x_t\mid x_{&lt;t}).
+\]</div>
+
+<p>A very improbable continuation therefore has high surprisal. But surprisal is only a scalar at the output of the predictive distribution. The question I want to investigate is what happens <em>inside</em> the network after such an event.</p>
+
+<h2>Where is time in a transformer?</h2>
+
+<p>The analogy immediately runs into a problem. A biological P300 unfolds in physical time after a stimulus. A standard transformer does not have an equivalent continuous time coordinate. Instead, there are two separate directions along which computation can be followed.</p>
+
+<p>The first is <strong>layer depth</strong>. For a fixed token \(t\), its representation is progressively transformed from the embedding layer through layers \(1,\ldots,L\). Work on transformer representations has already shown that information and anomaly signals can emerge differently at different depths.<sup><a href="#ref-li" aria-label="Reference 3">[3]</a></sup><sup><a href="#ref-voita" aria-label="Reference 4">[4]</a></sup> Layer depth is not physical time, but it does give an ordered sequence of computational transformations.</p>
+
+<p>The second direction is <strong>token progression</strong>. After an unexpected token appears at position \(t^\star\), the model continues with \(t^\star+1,t^\star+2,\ldots\). Those later token representations are computed using a context that now contains the surprising event. This gives a second axis along which its effect could persist and eventually disappear.</p>
+
+<p>The internal state can therefore be thought of as a two-dimensional object:</p>
+
+<div class="equation">\[
+\mathbf{h}_{\ell,t},
+\qquad
+\ell=1,\ldots,L,
+\qquad
+t=1,\ldots,T,
+\]</div>
+
+<p>where \(\ell\) describes computational depth and \(t\) describes progression through the sequence. Rather than asking for a response as a function of milliseconds, the project will ask whether surprise produces a localized structure somewhere on this layer-by-token plane.</p>
+
+<h2>What would “excitation” mean in an LLM?</h2>
+
+<p>There is obviously no voltage to measure. A useful operational definition is instead the amount by which a representation changes as computation proceeds. For example, for token \(t\), a simple layerwise update magnitude is</p>
+
+<div class="equation">\[
+U_{\ell,t}
+=
+\left\|
+\mathbf{h}_{\ell,t}
+-
+\mathbf{h}_{\ell-1,t}
+\right\|_2 .
+\]</div>
+
+<p>If a surprising token causes unusually large internal revision, one possibility is that \(U_{\ell,t}\) temporarily becomes larger than it does for a closely matched predictable continuation. Other measurements could use changes in feature activations, distances in representation space or changes in the probability distribution decoded from intermediate layers. The important point is not to assume beforehand that any particular activation norm is a P300 equivalent.</p>
+
+<p>A cleaner experiment would compare an unexpected continuation against a matched expected control. If \(t^\star\) is the manipulated token, we could construct a response surface such as</p>
+
+<div class="equation">\[
+R(\ell,k)
+=
+U^{\mathrm{surprise}}_{\ell,t^\star+k}
+-
+U^{\mathrm{control}}_{\ell,t^\star+k},
+\]</div>
+
+<p>where \(k=0\) measures the unexpected token itself and \(k&gt;0\) follows its effect into subsequent tokens.</p>
+
+<p>A P300-like pattern, in this deliberately loose computational sense, would not merely mean that the unexpected token has high surprisal. The more interesting possibility is a <em>transient</em> response: an unexpected event produces increased representational revision, that revision develops across some portion of the network, affects subsequent processing and then returns toward its ordinary regime.</p>
+
+<h2>Surprise versus representational updating</h2>
+
+<p>This distinction is important because prediction error and internal updating are not necessarily the same quantity. Human language experiments have connected word surprisal to electrophysiological responses, particularly the N400,<sup><a href="#ref-frank" aria-label="Reference 5">[5]</a></sup> while P300 research has long considered whether unexpected events trigger a broader context-updating process.<sup><a href="#ref-donchin" aria-label="Reference 2">[2]</a></sup></p>
+
+<p>There is also increasing interest in treating transformer hidden states as trajectories rather than isolated vectors. Recent work has examined how deviations from the preceding hidden-state trajectory can contain information that is not captured by token surprisal alone.<sup><a href="#ref-barenholtz" aria-label="Reference 6">[6]</a></sup> That makes the analogy especially interesting: perhaps the relevant quantity is not simply how unlikely a token was, but how strongly that token forces the model away from the representational path it was previously following.</p>
+
+<h2>The upcoming experiment</h2>
+
+<p>The project will therefore construct controlled sequences in which an expected continuation can be replaced by an increasingly surprising one while keeping the surrounding context as similar as possible. For each condition, I will record the hidden states across both layers and token positions.</p>
+
+<p>The main object of interest will be the resulting layer-by-token response surface. Does the effect appear immediately in shallow layers or only after deeper computation? Is it concentrated on the surprising token, or does it spill into the representations of later tokens? Does larger surprisal produce a larger representational disturbance? And, most importantly, is there evidence for a response that rises and then decays rather than simply remaining as a permanent difference between two sequences?</p>
+
+<p>This would not establish that an LLM literally possesses a P300. Transformers and biological neural systems have very different computational substrates, and layer depth should not be identified with milliseconds of cortical processing. The aim is narrower: to use the P300 as a computational analogy for asking whether prediction violations generate transient, structured changes in the internal dynamics of a language model.</p>
+
+<p>If that analogy is useful, the interesting object may not be a single activation at all. It may instead be the geometry of how an unexpected token perturbs representation over <em>two</em> computational directions: through the layers processing the current token, and through the future tokens that inherit the updated context.</p>
+<section class="references" aria-labelledby="references-title">
+<h2 id="references-title">References</h2>
+
+<ol>
+<li id="ref-polich">J. Polich, “Updating P300: An integrative theory of P3a and P3b” (2007), <em>Clinical Neurophysiology</em>, 118(10), 2128–2148. <a href="https://doi.org/10.1016/j.clinph.2007.04.019">https://doi.org/10.1016/j.clinph.2007.04.019</a>.</li>
+
+<li id="ref-donchin">E. Donchin and M. G. H. Coles, “Is the P300 component a manifestation of context updating?” (1988), <em>Behavioral and Brain Sciences</em>, 11(3), 357–374. <a href="https://doi.org/10.1017/S0140525X00058027">https://doi.org/10.1017/S0140525X00058027</a>.</li>
+
+<li id="ref-li">B. Li, Z. Zhu, G. Thomas, Y. Xu and F. Rudzicz, “How is BERT surprised? Layerwise detection of linguistic anomalies” (2021), <em>Proceedings of ACL-IJCNLP</em>, 4215–4228. <a href="https://doi.org/10.18653/v1/2021.acl-long.325">https://doi.org/10.18653/v1/2021.acl-long.325</a>.</li>
+
+<li id="ref-voita">E. Voita, R. Sennrich and I. Titov, “The Bottom-up Evolution of Representations in the Transformer: A Study with Machine Translation and Language Modeling Objectives” (2019), <em>Proceedings of EMNLP-IJCNLP</em>, 4396–4406. <a href="https://doi.org/10.18653/v1/D19-1448">https://doi.org/10.18653/v1/D19-1448</a>.</li>
+
+<li id="ref-frank">S. L. Frank, L. J. Otten, G. Galli and G. Vigliocco, “The ERP response to the amount of information conveyed by words in sentences” (2015), <em>Brain and Language</em>, 140, 1–11. <a href="https://doi.org/10.1016/j.bandl.2014.10.006">https://doi.org/10.1016/j.bandl.2014.10.006</a>.</li>
+
+<li id="ref-barenholtz">E. Barenholtz, “Trajectory Dynamics in Language Model Hidden States Predict Human Processing Costs Beyond Surprisal” (2026), preprint, arXiv:2606.05346. <a href="https://arxiv.org/abs/2606.05346">https://arxiv.org/abs/2606.05346</a>.</li>
+</ol>
+</section>
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+</body>
+</html>

@@ -21,16 +21,16 @@
     <main class="article-page">
       <article>
         <time datetime="2026-10-01">1 October 2026</time>
-        <h1>Viola-Jones | How we used to detect faces before neural networks</h1>
+        <h1>Viola-Jones | How we used to detect faces before deep learning</h1>
 	
-	<p> The years is 2004. Before neural networks, engineers had to be creative when detecting faces in footage and images. Since compute was scarce, efficiency was critical.</p>
-        <p>Viola–Jones is an early face-detection model that is still a beauty to study  <a href="#ref-3">[3]</a>  <a href="#ref-4">[4]</a>.
-Its speed was unparalled, and it came from several ideas working together. Firstly, it was a boosting algorithm: AdaBoost is used to turn a huge menu of simple visual tests into a compact classifier. Another ingredient are the filters: they describe local contrast and are simple enough to be generated synthetically. Last but not least, an integral image is computed, making  those tests extremely cheap to evaluate. A cascade then spends most of its effort rejecting easy background windows.</p>
+	<p> The year is 2001. Before neural networks, engineers had to be creative when detecting faces in footage and images. Since compute was scarce, efficiency was critical.</p>
+        <p>Viola–Jones is an early face-detection model that is still a beauty to study  <a href="#ref-3">[4]</a>  <a href="#ref-4">[5]</a>.
+Its speed was unparalleled, and it came from several ideas working together. Firstly, it was a boosting algorithm: AdaBoost is used to turn a huge menu of simple visual tests into a compact classifier. Another ingredient are the filters: they describe local contrast and are simple enough to be generated synthetically. Last but not least, an integral image for the entire image (not just each cell) is computed, making  those tests extremely cheap to evaluate. A cascade then spends most of its effort rejecting easy background windows.</p>
 
         <p>To study those ideas in depth, we'll be exploring a Python implementation I stumbled upon online: <a href="https://github.com/Donny-Hikari/Viola-Jones" target="_blank" rel="noopener noreferrer">Donny-Hikari/Viola-Jones</a>. The explanations below combine the repository’s code, its detection entry point and the original Viola–Jones papers.</p>
 
         <h2>What the detector is looking for</h2>
-        <p>A face is not recognized from a single pixel or color. The classic Viola–Jones detector asks whether small rectangular regions have particular average brightness relationships. A two-rectangle filter, for example, subtracts the sum of pixels in one region from the sum in its neighbor. Other filters compare three or four regions. Several variations of those feature exists, but their effect is always similar to the features considered in the original paper.</p>
+        <p>A face is not recognized from a single pixel or color. The classic Viola–Jones detector asks whether small rectangular regions have particular average brightness relationships. A two-rectangle filter, for example, subtracts the sum of pixels in one region from the sum in its neighbor. Other filters compare three or four regions. Several variations of those feature exist, but their effect is always similar to the features considered in the original paper.</p>
         <p>These filters are often called Haar-like features because their patterns resemble Haar wavelets <a href="#ref-1">[1]</a>. The original method evaluates a very large set of candidate rectangles at different positions and sizes. During training, AdaBoost will selects a small set of useful tests and will combine them into a stronger classifier.</p>
 
         <figure>
@@ -38,19 +38,19 @@ Its speed was unparalled, and it came from several ideas working together. First
           <figcaption>Examples of rectangular contrast patterns. Each feature is a weighted difference between the pixel sums in its light and dark regions.</figcaption>
         </figure>
 
-        <p>The filter design is part of the model’s appeal. Instead of asking a learned network to make up useful representation, introducing questions about interpretability, Viola–Jones starts with simple geometric patterns: perhaps a bright strip beside a dark strip, or a center band that differs from the bands around it. Such tests are easy to compute and can weakly respond to face structure, like the contrast between the eye region and cheeks. No one filter is a face detector by itself: the selected filters must work together to achieve an acceptable result.</p>
+        <p>The filter design is part of the model’s appeal. Instead of asking a learned network to make up a useful representation, introducing questions about interpretability, Viola–Jones starts with simple geometric patterns: perhaps a bright strip beside a dark strip, or a center band that differs from the bands around it. Such tests are easy to compute and can weakly respond to face structure, like the contrast between the eye region and cheeks. No one filter is a face detector by itself: the selected filters must work together to achieve an acceptable result.</p>
 
         <h2>The integral image is a clever trick</h2>
-        <p>A straightforward rectangle filter would add up every pixel in each rectangle. While this would not be a problem for modern GPUs, in limited compute environments like CCTV or small camera edge processors that quickly adds up. Recomputing local sums wastes a lot of work: as hundreds of filter slide across an image and changes size, we may be repeating the same local sums hundreds if not thousands of times. Here comes the clever trick: use an integral image, also called a summed-area table, to store cumulative pixel sums. At each location, it records the sum of all pixels above and to the left.</p>
+        <p>A straightforward rectangle filter would add up every pixel in each rectangle. While this would not be a problem for modern GPUs, in limited compute environments like CCTV or small camera edge processors that quickly adds up. Recomputing local sums wastes a lot of work: as hundreds of filter slide across an image changing size, we may be repeating the same local sums hundreds if not thousands of times. Here comes the clever trick: use an integral image, also called a summed-area table, to store cumulative pixel sums. At each location, it records the sum of all pixels above and to the left.</p>
 
-        <p>Once that map is computed, any rectangular sum comes from four values at its corners. Subtract the two outer strips, then add back the overlap that was subtracted twice. So a small filter can get its rectangle sums in a ridicolously low fixed number of operations, whatever the rectangle’s area is. Note however that the map is not itself a set of pixel differences, rather it is a compact cache that makes those later differences fast and cheap.</p>
+        <p>Once that map is computed, any rectangular sum comes from four values at its corners. Subtract the two outer strips, then add back the overlap that was subtracted twice. So a small filter can get its rectangle sums in a low fixed number of operations, whatever the rectangle’s area is. Note however that the map is not itself a set of pixel differences, rather it is a compact cache that makes those later differences fast and cheap.</p>
 
         <figure>
           <img src="resources/violajones/integralimage.jpeg" alt="A shaded rectangle in an integral image table with four corners labelled A, B, C, and D">
           <figcaption>For a half-open rectangle, its sum is D − B − C + A. The four lookups are the key to fast Haar-like feature evaluation.</figcaption>
         </figure>
 
-        <p>Here is a small NumPy example of the idea, which is not excerpt from the repository and is presented here for clarity. We add zero rows and columns to make the corner formula work cleanly for rectangles that touch the image boundary.</p>
+        <p>Here is a small NumPy example of the idea, which is not an excerpt from the repository and is presented here for clarity. We add zero rows and columns to make the corner formula work cleanly for rectangles that touch the image boundary.</p>
         <pre class="language-python"><code class="language-python">import numpy as np
 
 def integral_image(gray):
@@ -70,7 +70,7 @@ left_right_feature = left - right</code></pre>
 
         <h2>Boosting turns many tests into a detector</h2>
         <p>The feature space is clearly enormous, but most candidate tests are only extremely weakly informative for recognizing faces. AdaBoost repeatedly chooses a weak classifier that helps separate face windows from non-face windows, gives more weight to the examples it currently gets wrong, and combines the selected classifiers with learned weights. 
-Unlike models like random forests, boosting allows new entries to the flter collection to make up for the errors of its predecessors. 
+Unlike models like random forests, boosting allows new entries to the filter collection to make up for the errors of its predecessors. 
 In this setting, a weak classifier can be a threshold on one feature response.</p>
         <p>The useful detail is that boosting does two jobs at once: it trains a classifier and selects which visual features the classifier needs. The final decision focuses on a small, informative subset of the generated candidate filters. That is a beautiful coupling of learning and engineering: feature selection directly reduces the work at detection time.</p>
 
@@ -80,17 +80,15 @@ In this setting, a weak classifier can be a threshold on one feature response.</
         <p>The stages are tuned to keep nearly all face candidates while rejecting many non-faces at each step. Again, the same idea from boosting is present: while a single stage can be permissive and only weakly discard background patches, the concatenation of stages becomes selective. Surviving windows can overlap because a face may be found at nearby positions and scales, depending on the algorithm patch size setting, so a final grouping step can merge repeated detections.</p>
 
         <figure>
-          <img src="resources/violajones/springernature.png" alt="A face frame is scanned with overlapping windows, passed through increasingly complex cascade stages, and overlapping face candidates are merged">
+          <img src="resources/violajones/springernature.png" alt="A deep learninig application of Viola Jones">
           <figcaption>Conceptual detection flow: scan at several positions and scales, reject most windows early, then group overlapping survivors. Pictured is a more complicated pipeline embedding deep learning in the algorithm, reproduced from 
             "Deep facial expression detection using Viola-Jones algorithm, CNN-MLP and CNN-SVM", Hadhami Aouani & Yassine Ben Ayed  <a href="#ref-2">[2]</a>.
           </figcaption>
         </figure>
 
         <h2>Walking through the repository</h2>
-	<p>Having understood how Viola-Jones operates, we are ready to study the source code of the Python implementation in detail. The repository is due to user Donny-Hikary, and it implements the full Viola-Jones inference pipeline, from training to inference using webcam input. We'll see how the ingredients we discussed above combine together.  </p>
+	<p>Having understood how Viola-Jones operates, we are ready to study the source code of the Python implementation in detail. The repository is due to user Donny-Hikari, and it implements the full Viola-Jones inference pipeline, from training to inference using webcam input. We'll see how the ingredients we discussed above combine together.  </p>
 
-	<h2>Walking through the repository</h2>
-<p>This is an online repository by Donny-Hikari that I found and am exploring here; it is not my project. It contains the feature code, the boosting and cascade code, a face detector, and a webcam script. Following those pieces in order makes it easier to see how the ideas from the first part of this article become a working detector.</p>
 
 <h3>Feature generation: the HaarlikeFeature class</h3>
 <p>The <a href="https://github.com/Donny-Hikari/Viola-Jones/blob/master/boostedcascade/haarlikefeature.py">HaarlikeFeature class</a> defines five feature types: two rectangles side by side, two stacked vertically, three side by side, three stacked vertically, and a four-rectangle diagonal pattern. Each feature compares the sums of its light and dark regions. For example, a two-rectangle feature responds to the difference between the left and right halves of its window. It does not need to recognize a face by itself; it gives a weak classifier a simple visual measurement to threshold.</p>
@@ -145,7 +143,6 @@ faces = mergeRects(faces, overlap_rate=0.82, min_overlap_cnt=4)</code></pre>
         <h2>Conclusion</h2>
         <p>Viola–Jones is still interesting to study nowadays. Its former primacy came from a small set of good simplifications: describe local contrast with rectangular filters, use an integral image to compute their responses cheaply, let boosting keep only useful filters, and arrange the resulting classifiers so easy negatives exit early.
  Each choice is understandable on its own, and together they made practical face detection possible on the hardware of their time.</p>
-<p>The original paper reported examples of the performance of algorithm on the historic 1927 Solvay Council shot. While its easy to be unimpressed with its performance if one has experience with modern deep learning, its still fantastic to see how accurate it can be. </p>
         <p>The design is a useful lesson even for newer vision models: representation, learning, and compute strategy are meant to fit together neatly like a puzzle. A good model is not only about what it can recognize, but also about how much work it does to reach an answer.</p>
 
         <section class="references" aria-labelledby="references-title">

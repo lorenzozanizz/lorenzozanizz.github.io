@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Finding the footer of an email with regex features and a small recurrent network, and why the problem has to be fuzzy.">
+  <title>Finding email footers with regexes and a tiny RNN · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+  <script src="../toc.js" defer></script>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-10-01">1 October 2026</time>
+        <h1>Finding the footer: regexes as features, a small RNN as the judge</h1>
+
+        <p>Anyone who has pulled mail out of an IMAP server knows that the "text" of a message is a polite fiction. You get the body, but also the quoted reply from three messages ago, a mobile signature, a legal disclaimer, a forwarded header, and at the bottom the footer you actually wanted: name, role, company, phone, VAT number. This post is about a small component that finds that footer line by line. It computes a vector of regex-based features for each line, then lets a small TensorFlow RNN decide which lines belong to the footer.</p>
+
+        <p>The prior work on this is old and good. Carvalho and Cohen treated signature and reply detection as a line classification problem back in 2004 <a href="#ref-1">[1]</a>, and Mailgun's Talon library still ships a pile of heuristics for it <a href="#ref-2">[2]</a>. What follows is a smaller, Italian-flavoured version of the same idea.</p>
+
+        <h2>The data</h2>
+        <p>The study set is a JSONL file of 60 synthetic emails: 36 in Italian, 24 in English, spread over 12 signature layouts (5 emails each). Each record has the raw <code>text</code> and a <code>footer_fields</code> dictionary with the ground truth values: person, organization, role, email, phone, address, <code>vat_number</code> and, depending on the layout, things like REA number, IBAN, SDI code or PEC address.</p>
+        <p>The file has no per-line labels, so the first job was to derive them. In all 60 emails there is exactly one blank line, and it separates the body from the footer. Headers (<code>From:</code>, <code>To:</code>, <code>Oggetto:</code>) come first, then the body, then the blank line, then 3 to 7 footer lines. That rule is cheap and, on this set, exact:</p>
+<pre class="language-python"><code class="language-python">import json
+
+def load(path):
+    for raw in open(path, encoding="utf-8"):
+        rec = json.loads(raw)
+        lines = rec["text"].split("\n")
+        cut = lines.index("")                    # the single blank line
+        labels = [0] * (cut + 1) + [1] * (len(lines) - cut - 1)
+        yield lines, labels, rec["footer_fields"]</code></pre>
+        <p>The blank line is a convenience of this dataset, not of the real world, and that matters later.</p>
+
+        <h2>First idea: count the regex hits</h2>
+        <p>The first version had no learning at all. A footer line is full of recognisable atoms, so write one regex per atom and call a line a footer line if enough of them fire. Here is the core of it, tuned on Italian conventions:</p>
+<pre class="language-python"><code class="language-python">import re
+
+EMAIL   = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+PHONE   = re.compile(r"(?:\+39[\s.-]?)?(?:\(0\)|\b0\d{1,3}|\b3\d{2})[\s./-]?\d{3,4}[\s./-]?\d{3,4}\b")
+VAT     = re.compile(r"\b(?:p\.?\s*iva|vat(?:\s*\(it\))?(?:\s*number)?|partita\s+iva)\b[\s:]*(?:IT)?\s*(\d{11})", re.I)
+CAP_PRV = re.compile(r"\b\d{5}\s+[A-Z][\w' ]+\s*\([A-Z]{2}\)")
+URL     = re.compile(r"\b(?:https?://|www\.)\S+|\b[\w-]+\.(?:example|com|it|org)\b", re.I)
+IBAN    = re.compile(r"\bIT\d{2}[A-Z]\d{10}[0-9A-Z]{12}\b")
+LEGAL   = re.compile(r"\b(?:S\.?p\.?A\.?|S\.?r\.?l\.?|S\.?n\.?c\.?)\b", re.I)
+REA     = re.compile(r"\bREA\b[\s:]*[A-Z]{2}[-/]?\d+", re.I)</code></pre>
+        <p>Two details are worth a note. The VAT regex does not just look for eleven digits, because eleven digits also match half the order numbers on earth. It anchors on the label (<code>P. IVA</code>, <code>P.IVA</code>, <code>P iva</code>, <code>VAT (IT)</code>) first. And I do not enforce the Italian checksum <a href="#ref-3">[3]</a> here, since the generated numbers are synthetic and I would rather test the layout logic than the generator. On real data you would add it as one more feature, because it is a very sharp one.</p>
+        <p>The phone regex has to be loose. The dataset contains <code>+39 02 5550 1000</code>, <code>tel . +39 (0)051 555.01004</code>, <code>Uff. 040 55 50 1001</code>, <code>cell +39 391-555-1017</code> and even <code>Tel. 0080 / 555-1045</code>. Strict phone grammars lose here, so the regex accepts plausible shapes and leaves the doubt to the next stage.</p>
+
+        <p>This first version worked on the clean cases and then fell apart in three ways, all of which taught me something.</p>
+        <ul>
+          <li>The body contains numbers too. Emails like <code>invoice 2027-0355</code> or <code>Tracking: 2027-2547</code> put digit sequences in the middle of the text.</li>
+          <li>The same reference sometimes comes back in the footer. In 10 of the 60 emails the body reference is repeated in the signature (<code>Rif. 2026-0492</code>), so a "has a reference number" rule is wrong in both directions.</li>
+          <li>Some lines are footer lines with zero hits. <code>amministrazione</code> on its own, or <code>Account manager</code>, carries no regex atom at all, yet it is clearly part of the block.</li>
+        </ul>
+
+        <h2>Why the answer must be fuzzy</h2>
+        <p>The last point is the real lesson. A footer is not a set of lines with certain properties, it is a contiguous region at the end of the message, and a line is in it partly because of its neighbours. The line <code>Luna Studio S.p.A.</code> is probably a footer line when it sits above a phone line and below a name. The same string inside a sentence of the body is not.</p>
+        <p>Real mail adds more noise than my synthetic set does. After IMAP extraction you may see:</p>
+        <ul>
+          <li>quoted previous messages (<code>&gt; </code> prefixes, or "On Tue, X wrote:" headers) that contain complete old signatures;</li>
+          <li>sign-offs in the wrong language, which already happens here: <code>Kind regards, Paolo Marini</code> in an Italian email, or <code>-- G. Serra</code> with a different dash style;</li>
+          <li>conversion artifacts, such as a lost blank line, a joined line, or <code>=C3=A8</code> leftovers;</li>
+          <li>numbers and addresses in the body that look like a footer.</li>
+        </ul>
+        <p>A hard rule gets every one of these wrong at the boundary. So the regexes stop being the classifier and become a feature extractor, and the decision moves to a model that can look at the sequence.</p>
+
+        <h2>Version two: a feature vector per line</h2>
+        <p>Each line becomes a small dense vector. The regex hits are binary, and I add a few cheap shape features. The gazetteer of city names is a plain set of lowercase names, matched on tokens, which catches lines like <code>Account manager · Roma · +39 338 555 1002</code> where there is no CAP and province to anchor on.</p>
+<pre class="language-python"><code class="language-python">import numpy as np
+
+CITIES = {"milano", "roma", "torino", "trieste", "bologna", "firenze",
+          "padova", "bari", "cagliari"}            # in practice: the ISTAT list
+SIGNOFF = re.compile(r"^(?:grazie|a presto|cordiali saluti|distinti saluti|"
+                     r"regards|kind regards|best|--)\b", re.I)
+HEADER  = re.compile(r"^(?:from|to|da|a|subject|oggetto)\s*:", re.I)
+ROLE    = re.compile(r"\b(?:amministrazione|contabilit[aà]|logistica|sales|"
+                     r"operations|account manager|assistenza clienti|consulente)\b", re.I)
+
+PATTERNS = [EMAIL, PHONE, VAT, CAP_PRV, URL, IBAN, LEGAL, REA, SIGNOFF, HEADER, ROLE]
+
+def line_features(line, idx, n_lines):
+    s = line.strip()
+    toks = re.findall(r"[a-zàèéìòù']+", s.lower())
+    hits = [1.0 if p.search(s) else 0.0 for p in PATTERNS]
+    shape = [
+        len(s) / 80.0,
+        sum(c.isdigit() for c in s) / max(len(s), 1),
+        1.0 if any(t in CITIES for t in toks) else 0.0,
+        1.0 if s == "" else 0.0,
+        s.count("|") + s.count("·") + s.count("/") > 0,
+        idx / max(n_lines - 1, 1),                  # relative position
+    ]
+    return np.array(hits + [float(x) for x in shape], dtype="float32")
+
+N_FEATURES = len(PATTERNS) + 6</code></pre>
+        <p>The relative position feature deserves a comment. It is the model's only global clue, and it is the one most likely to be abused: with 60 clean emails a network can learn "last 40 percent of the message is footer" and look brilliant. That is exactly why I did not stop here.</p>
+
+        <h2>Version three: let a recurrent layer see the neighbours</h2>
+        <p>Footers are contiguous and they are at the end, which is a natural fit for a sequence model. One email is one sequence of line vectors, and the output is one probability per line. I used a bidirectional GRU <a href="#ref-4">[4]</a>: bidirectional because a line is more likely to be footer if the lines after it look like a footer too, and a GRU rather than an LSTM because with sequences of about ten steps there is nothing to remember for long. The network is tiny, in the tens of thousands of parameters.</p>
+<pre class="language-python"><code class="language-python">import tensorflow as tf
+from tensorflow.keras import layers, Model
+
+MAX_LINES = 40
+
+def build_model():
+    x_in = layers.Input(shape=(MAX_LINES, N_FEATURES))
+    x = layers.Masking(mask_value=0.0)(x_in)           # ignore padded lines
+    x = layers.Bidirectional(layers.GRU(32, return_sequences=True))(x)
+    x = layers.Dropout(0.2)(x)
+    out = layers.TimeDistributed(layers.Dense(1, activation="sigmoid"))(x)
+    model = Model(x_in, out)
+    model.compile(optimizer="adam", loss="binary_crossentropy",
+                  metrics=["accuracy", tf.keras.metrics.Recall(name="footer_recall")])
+    return model</code></pre>
+        <p>Padding needs care, because a masked zero vector must not be confused with a real line. A truly blank line has the <code>is_blank</code> flag set, so its vector is not all zeros and survives the mask.</p>
+
+        <h2>Making it robust: training on messy mail</h2>
+        <p>The synthetic emails are tidy, so a model trained on them alone would be tidy-minded too. The fix is to corrupt the training examples in the ways IMAP does, while keeping the labels honest. The quoted block is the important one: it carries a complete old signature, and every line of it must be labelled <em>not footer</em>, otherwise the network learns that footers can appear mid-message.</p>
+<pre class="language-python"><code class="language-python">import random
+
+def add_quoted_reply(lines, labels, pool):
+    other_lines, _, _ = random.choice(pool)
+    quoted = ["> " + l for l in other_lines]
+    head = ["On Tue, 12 Mar, someone wrote:"]
+    return lines + head + quoted, labels + [0] * (len(head) + len(quoted))
+
+def drop_blank(lines, labels):
+    # the blank line often vanishes in extraction: forget the easy clue
+    keep = [i for i, l in enumerate(lines) if l != ""]
+    return [lines[i] for i in keep], [labels[i] for i in keep]
+
+def jitter_body_numbers(lines, labels):
+    # plant footer-looking digits in the body to punish digit shortcuts
+    i = random.randrange(0, max(labels.index(1), 1))
+    lines[i] += f" (rif. {random.randint(2026,2027)}-{random.randint(1000,9999)})"
+    return lines, labels</code></pre>
+        <p>Notice what <code>add_quoted_reply</code> does to the geometry. After it, the real footer is no longer at the very end of the text, and the relative position feature stops being a free lunch. In practice you would also strip lines that start with <code>&gt;</code> before featurizing, but I keep them in training so that the model survives when that step misses one.</p>
+
+        <h2>From probabilities to a footer</h2>
+        <p>The network gives a score per line, and a raw threshold gives ragged results: one low-scoring <code>amministrazione</code> line in the middle of a block splits it in two. A small decoding step repairs this by taking the longest run of lines above the threshold, and allowing a gap of one line:</p>
+<pre class="language-python"><code class="language-python">def decode(probs, thr=0.5, max_gap=1):
+    best, start, gap, last = (0, 0), None, 0, None
+    for i, p in enumerate(probs):
+        if p &gt;= thr:
+            start = i if start is None else start
+            last, gap = i, 0
+        elif start is not None:
+            gap += 1
+            if gap &gt; max_gap:
+                if last - start &gt; best[1] - best[0]:
+                    best = (start, last)
+                start = None
+    if start is not None and last - start &gt; best[1] - best[0]:
+        best = (start, last)
+    return best        # inclusive range of footer lines</code></pre>
+        <p>This is the same instinct as the cascade in my <a href="viola-jones.html">Viola-Jones post</a>, in a different place: let a cheap local test make the proposals, then use a grouping step to clean up the survivors.</p>
+
+        <h2>What I would check next</h2>
+        <p>I have not benchmarked this against real mail, and 60 synthetic messages are only enough to test the plumbing. The questions I care about are the following. First, does the model keep its recall once the blank line is removed from every example? Second, how does it behave on the 10 emails where the body reference reappears in the footer, which is the case a pure regex score cannot separate? Third, does the relative position feature help or just hide failures? Ablating it is a one-line change in <code>line_features</code>, and I expect the answer to be uncomfortable.</p>
+        <p>The broader point is a division of labour that I find pleasant. Regexes are exact, cheap and explainable, so they get the job of naming the atoms. The network is soft and contextual, so it gets the job of deciding what the atoms mean together. Neither one is good at the other's work.</p>
+
+        <section class="references" aria-labelledby="references-title">
+          <h2 id="references-title">References</h2>
+          <ol>
+            <li><a id="ref-1" href="https://www.cs.cmu.edu/~vitor/papers/ceas04.pdf" target="_blank" rel="noopener noreferrer">Vitor R. Carvalho and William W. Cohen, “Learning to Extract Signature and Reply Lines from Email,” CEAS 2004.</a></li>
+            <li><a id="ref-2" href="https://github.com/mailgun/talon" target="_blank" rel="noopener noreferrer">Mailgun, Talon: quotation and signature extraction</a></li>
+            <li><a id="ref-3" href="https://it.wikipedia.org/wiki/Partita_IVA" target="_blank" rel="noopener noreferrer">Partita IVA, Wikipedia (structure and check digit)</a></li>
+            <li><a id="ref-4" href="https://arxiv.org/abs/1406.1078" target="_blank" rel="noopener noreferrer">Kyunghyun Cho et al., “Learning Phrase Representations using RNN Encoder-Decoder for Statistical Machine Translation,” 2014.</a></li>
+          </ol>
+        </section>
+      </article>
+    </main>
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-python.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>

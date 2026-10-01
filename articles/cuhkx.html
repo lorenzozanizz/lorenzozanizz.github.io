@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A walkthrough of my entry to the CUHK-X Small Model Track: six sensing modalities, one small network each, and a tiny transformer that fuses them under a 100 MB budget.">
+  <title>CUHK-X | Fusing six sensors in under 100 MB · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+  <script src="../toc.js" defer></script>
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img, figure svg { display: block; width: 100%; max-width: 720px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+    table.data { border-collapse: collapse; margin: 1.4rem 0; font-size: .95rem; }
+    table.data th, table.data td { border-bottom: 1px solid rgba(128,128,128,.4); padding: .4rem .8rem; text-align: left; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-10-01">1 October 2026</time>
+        
+        <h1>CUHK-X | Fusing six sensors in under 100 MB</h1>
+
+        
+<aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/lorenzozanizz/cuhk-x-kaggle"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      cuhk-x-kaggle ↗
+    </a>
+  </div>
+</aside>
+
+        <p>Picture a flat where an elderly person lives alone. A system that notices a fall, or a slow change in how someone washes their face or gets out of a chair, would be genuinely useful. Nobody wants an RGB camera in that flat, though. The CUHK-X challenge starts from this tension: recognize what a person is doing from depth, thermal, infrared, inertial, radar and skeleton data, with no RGB at all <a href="#ref-1">[1]</a>.</p>
+        <p>This post walks through my entry to the Small Model Track of the challenge, organized at UbiComp / ISWC 2026. The full code is on GitHub <a href="#ref-4">[4]</a>. The idea is easy to state: train one small network per sensor, turn each network's output into a handful of tokens, and let a tiny transformer decide how much to trust each sensor for every clip. The details are where it gets interesting, because the test set has missing sensors, the evaluation is cross-subject, and everything has to fit in 100 MB.</p>
+
+        <h2>The competition in brief</h2>
+        <p>The challenge has two parallel Kaggle tracks. The Large Model Track asks for visual question answering with large multimodal models. The Small Model Track, which is the one discussed here, is a plain 40-class classification problem: given a multimodal clip, predict which of 40 daily activities is happening <a href="#ref-1">[1]</a>. It targets edge deployment in smart-home and healthcare scenarios, where the model must run on low-power devices with limited memory and compute.</p>
+        <p>The rules are what make the track interesting. Models must be conventional architectures (CNN, RNN or Transformer), their size must not exceed 100 MB, and large pretrained backbones are forbidden. Closed-source APIs and LLMs are not allowed either, even for labeling training data <a href="#ref-1">[1]</a>. Everything has to be trained from scratch on the competition data.</p>
+        <p>The evaluation is strictly cross-subject. Training uses users 1 to 9 and 16 to 24, while testing uses users 10, 11, 25 and 26 <a href="#ref-1">[1]</a>. A model that memorizes the gait or the body proportions of a participant will look great on a random split and fail on the leaderboard. For finalists, the Kaggle score is only 20% of the final grade. Organizer-run private evaluation weighs 30%, and model efficiency has its own 10% share <a href="#ref-1">[1]</a>, so staying small is a goal and not only a constraint.</p>
+
+        <h2>The data</h2>
+        <p>CUHK-X contains 64,267 synchronized samples across seven modalities, collected from 30 participants performing 40 activities in two indoor environments <a href="#ref-1">[1]</a>. The dataset paper also defines action understanding and reasoning tasks on top of plain recognition <a href="#ref-2">[2]</a>, but the small track only uses the classification part. RGB is removed. The Hugging Face release lists six modalities <a href="#ref-3">[3]</a>:</p>
+
+        <table class="data">
+          <thead><tr><th>Modality</th><th>What it is</th><th>On disk</th></tr></thead>
+          <tbody>
+            <tr><td>Depth_Color</td><td>colorized depth frames</td><td>PNG frames</td></tr>
+            <tr><td>IR</td><td>infrared frames</td><td>PNG frames</td></tr>
+            <tr><td>Thermal</td><td>thermal frames</td><td>JPG frames</td></tr>
+            <tr><td>IMU</td><td>inertial sensors</td><td>CSV files</td></tr>
+            <tr><td>Radar</td><td>mmWave radar point clouds</td><td>CSV files</td></tr>
+            <tr><td>Skeleton</td><td>pose keypoints</td><td>JSON files and visualizations</td></tr>
+          </tbody>
+        </table>
+
+        <p>The training labels live in the folder structure, <code>HAR/data/&lt;modality&gt;/&lt;action&gt;/&lt;user&gt;/&lt;trial&gt;</code>, and the test set has 405 anonymized clips <a href="#ref-3">[3]</a>. Two details of the dataset card shape the whole design. Sampling rates differ across modalities, and not every clip has every modality <a href="#ref-3">[3]</a>. A clip can be a few hundred radar frames, sixteen useful depth frames and no thermal data at all, and the model has to cope with all of these cases.</p>
+
+        <h2>Three constraints, one architecture</h2>
+        <p>Most of my design choices trace back to three problems:</p>
+        <p><strong>Size.</strong> The budget is 100 MB. The repository counts size as fp32 parameters times four bytes, so the ceiling is about 25 million parameters across all branches, the fusion stage and every auxiliary head.</p>
+        <p><strong>Cross-subject generalization.</strong> Every preprocessing step asks the same question: is this signal about the action, or about the person? Body size, facing direction, sensor mounting and absolute position are all cues that identify a subject, and none of them helps on unseen users.</p>
+        <p><strong>Missing modalities.</strong> The fusion model cannot assume that all six inputs exist. It must work for a clip with six sensors and for a clip with two.</p>
+        <p>The answer is a late-fusion design. Each modality gets its own backbone, trained on its own, which outputs a small set of tokens of shape <code>[B, K, D]</code>. A fusion transformer then reads the tokens of all present modalities, plus a learned classification token, and predicts the action. The figure below shows the whole pipeline.</p>
+
+        <figure>
+          <svg viewBox="0 0 740 360" role="img" aria-label="Six modality backbones feed four tokens each into a fusion transformer with a CLS token, which feeds a linear head with 40 classes" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="none" stroke="currentColor" stroke-width="1.5">
+            <g>
+              <rect x="10" y="14" width="200" height="38" rx="6"/><text x="20" y="38" fill="currentColor" stroke="none">Depth: 2D CNN + temporal conv</text>
+              <rect x="10" y="66" width="200" height="38" rx="6"/><text x="20" y="90" fill="currentColor" stroke="none">IR: same, 1 channel</text>
+              <rect x="10" y="118" width="200" height="38" rx="6"/><text x="20" y="142" fill="currentColor" stroke="none">Thermal: same, narrower</text>
+              <rect x="10" y="170" width="200" height="38" rx="6"/><text x="20" y="194" fill="currentColor" stroke="none">IMU: dilated 1D conv</text>
+              <rect x="10" y="222" width="200" height="38" rx="6"/><text x="20" y="246" fill="currentColor" stroke="none">Radar: point pool + transformer</text>
+              <rect x="10" y="274" width="200" height="38" rx="6"/><text x="20" y="298" fill="currentColor" stroke="none">Skeleton: transformer + resampler</text>
+            </g>
+            <g>
+              <line x1="210" y1="33" x2="270" y2="33"/><line x1="210" y1="85" x2="270" y2="85"/><line x1="210" y1="137" x2="270" y2="137"/>
+              <line x1="210" y1="189" x2="270" y2="189"/><line x1="210" y1="241" x2="270" y2="241"/><line x1="210" y1="293" x2="270" y2="293"/>
+              <rect x="270" y="14" width="86" height="38" rx="6"/><text x="280" y="38" fill="currentColor" stroke="none">4 tokens</text>
+              <rect x="270" y="66" width="86" height="38" rx="6"/><text x="280" y="90" fill="currentColor" stroke="none">4 tokens</text>
+              <rect x="270" y="118" width="86" height="38" rx="6"/><text x="280" y="142" fill="currentColor" stroke="none">4 tokens</text>
+              <rect x="270" y="170" width="86" height="38" rx="6"/><text x="280" y="194" fill="currentColor" stroke="none">4 tokens</text>
+              <rect x="270" y="222" width="86" height="38" rx="6"/><text x="280" y="246" fill="currentColor" stroke="none">4 tokens</text>
+              <rect x="270" y="274" width="86" height="38" rx="6"/><text x="280" y="298" fill="currentColor" stroke="none">4 tokens</text>
+            </g>
+            <g>
+              <line x1="356" y1="33" x2="440" y2="150"/><line x1="356" y1="85" x2="440" y2="158"/><line x1="356" y1="137" x2="440" y2="166"/>
+              <line x1="356" y1="189" x2="440" y2="174"/><line x1="356" y1="241" x2="440" y2="182"/><line x1="356" y1="293" x2="440" y2="190"/>
+              <rect x="440" y="110" width="140" height="120" rx="8"/>
+              <text x="452" y="145" fill="currentColor" stroke="none">Fusion transformer</text>
+              <text x="452" y="167" fill="currentColor" stroke="none">CLS + 24 tokens</text>
+              <text x="452" y="189" fill="currentColor" stroke="none">2 layers, width 256</text>
+              <text x="452" y="211" fill="currentColor" stroke="none">padding mask</text>
+              <line x1="580" y1="170" x2="630" y2="170"/>
+              <rect x="630" y="140" width="100" height="60" rx="8"/>
+              <text x="642" y="166" fill="currentColor" stroke="none">Linear head</text>
+              <text x="642" y="186" fill="currentColor" stroke="none">40 classes</text>
+            </g>
+          </svg>
+          <figcaption>The overall pipeline. Every backbone ends in the same interface, a fixed number of tokens, so the fusion stage never needs to know what produced them. Each branch also has an auxiliary classifier during training.</figcaption>
+        </figure>
+
+        <h2>Turning folders into samples</h2>
+        <p>The first job is to reassemble clips. The dataset stores each modality in its own folder tree, so one physical recording is spread over up to six directories. The <code>DataIndex</code> class walks every modality tree and merges folders that share the same (action, user, trial) key into a single record, which keeps a dictionary from modality name to folder path:</p>
+        <pre class="language-python"><code class="language-python">for modality in tqdm.tqdm(MODALITIES):
+    data_root = os.path.join(self.data_root, modality)
+    # ... walk action / user / trial directories ...
+    action_id = int(action.split("_")[0])
+    # ...
+    key = (action_id, user, trial)
+    entry = self._samples.setdefault(
+        key, {"label": action_id, "user": user, "paths": {}})
+    entry["paths"][modality] = tdir</code></pre>
+        <p>The label comes from the numeric prefix of the action folder, such as <code>0_Wash_face</code>. A missing modality simply means a missing key in <code>paths</code>. The class also has a <code>statistics()</code> method that prints how many samples have all six modalities and which combinations of missing ones occur, which is the first thing worth looking at before trusting any fusion result.</p>
+
+        <h3>A validation split that behaves like the test set</h3>
+        <p>Since the leaderboard is cross-subject, the local validation must be too. A random split of clips would put the same person in both training and validation, and the accuracy would be inflated by subject identity. The split is done on users instead:</p>
+        <pre class="language-python"><code class="language-python">def split_by_user(samples, val_fraction=0.2, seed=0):
+    users = sorted({s["user"] for s in samples})
+    rng = random.Random(seed)
+    rng.shuffle(users)
+    n_val = max(1, int(round(len(users) * val_fraction)))
+    val_users = set(users[:n_val])
+    train = [s for s in samples if s["user"] not in val_users]
+    val = [s for s in samples if s["user"] in val_users]
+    return train, val, sorted(val_users)</code></pre>
+        <p>With 18 training users and a fraction of 0.2, this holds out four whole users. The validation set is small and noisy, but it is honest, and every number shown by the training scripts comes from it.</p>
+
+        <h3>Fixed shapes and a presence mask</h3>
+        <p>Batching clips of different modalities needs fixed tensor shapes. The loaders map every clip to a constant shape: 16 frames of 112 by 112 pixels for the three image modalities, 64 frames of 17 joints for the skeleton, a 30 by 400 grid for the IMU and a 32 by 8 point grid per radar bin. The <code>MultiModalityDataset</code> then fills absent modalities with zeros and returns a binary mask next to the data, so that the default collate function works and the model still knows what is real:</p>
+        <pre class="language-python"><code class="language-python">def __getitem__(self, i):
+    s = self.items[i]
+    out, mask = {}, torch.zeros(len(self.modalities))
+    for j, m in enumerate(self.modalities):
+        if m in s["paths"]:
+            out[m] = Loaders.get(m)(s["paths"][m], self.train)
+            mask[j] = 1.0
+        else:
+            out[m] = torch.zeros(SHAPES[m])
+    return out, mask, s["label"]</code></pre>
+
+        <h2>One loader per modality</h2>
+        <p>Each modality has its own loader, with its own normalization and its own augmentation. This is only possible because the backbones are trained independently first. As a comment in the config file puts it, there is no need to keep augmented data consistent across channels, so a skeleton can be rotated freely without caring what the depth camera would have seen.</p>
+
+        <h3>Depth, infrared and thermal frames</h3>
+        <p>The three image modalities share one loader. Clips are short and neighboring frames are nearly identical, so the loader samples 16 frames uniformly in relative clip time and adds a small random jitter during training as temporal augmentation:</p>
+        <pre class="language-python"><code class="language-python">def sample_indices(n, k, jitter):
+    idx = np.linspace(0, n - 1, k)
+    if jitter and n &gt; k:
+        idx = idx + np.random.uniform(-0.5, 0.5, size=k) * (n / k)
+    return np.clip(np.round(idx), 0, n - 1).astype(int)</code></pre>
+        <p>Spatial augmentation parameters are drawn once per clip, not once per frame. A random crop, a flip and a brightness gain are applied identically to all 16 frames, because otherwise the augmentation would invent motion that does not exist. At validation time the crop is centered and nothing else changes:</p>
+        <pre class="language-python"><code class="language-python">load_size = int(VISION_SIZE * AUG_CROP_FACTOR)
+max_off = load_size - VISION_SIZE
+if train:
+    ox = np.random.randint(0, max_off + 1)
+    oy = np.random.randint(0, max_off + 1)
+    flip = np.random.rand() &lt; 0.5
+    gain = np.random.uniform(*AUG_GAIN_RANGE)
+else:
+    ox = oy = max_off // 2
+    flip = False
+    gain = 1.0</code></pre>
+        <p>Frames are loaded at 1.15 times the target size and then cropped, and pixel values stay in [0, 1]. There is no mean and standard deviation normalization here on purpose. The networks are trained from scratch and start with a BatchNorm layer, which absorbs any fixed affine change of the input anyway.</p>
+
+        <h3>Skeleton</h3>
+        <p>The skeleton loader reads one JSON file per frame and takes the first detected person. Pose estimators fail from time to time, so a corrupt or non-finite frame repeats the last valid pose instead of injecting garbage:</p>
+        <pre class="language-python"><code class="language-python">for i in idx:
+    try:
+        with open(files[i]) as f:
+            data = json.load(f)
+        kp = np.asarray(data[0]["keypoints"], dtype=np.float32)
+        if kp.shape == (NUM_JOINTS, 3) and np.isfinite(kp).all():
+            last = kp
+    except Exception:
+        pass
+    seq.append(last.copy())</code></pre>
+        <p>Then come the two normalizations that matter most for cross-subject transfer. Subtracting the root joint removes where the person stands, and dividing by the mean joint distance removes how large the person is. During training, a random rotation around the vertical axis (up to 30 degrees) and a little Gaussian noise are added on top:</p>
+        <pre class="language-python"><code class="language-python">x = np.stack(seq)
+x = x - x[:, :1, :]
+scale = np.linalg.norm(x.reshape(-1, 3), axis=1).mean()
+if scale &gt; 1e-4:
+    x = x / scale
+if train:
+    R = rot_about_axis(np.random.uniform(-AUG_SKEL_ROT_RAD, AUG_SKEL_ROT_RAD), SKELETON_UP_AXIS)
+    x = x @ R.T
+    x = x + np.random.normal(0, AUG_SKEL_NOISE, x.shape).astype(np.float32)</code></pre>
+        <p>The file also contains a variant, <code>load_skeleton_2</code>, that rotates each clip so that the average hip-to-hip vector points in a fixed direction. It would remove the facing direction deterministically instead of relying on augmentation, but in the current code that step is commented out, because the hip vector is itself noisy.</p>
+
+        <h3>Radar</h3>
+        <p>Radar is the strangest modality. Each raw frame is a small point cloud, typically a handful of points with position, velocity, signal-to-noise ratio and a noise level. An earlier version of my loader collapsed every frame to a mean, a standard deviation and a maximum. With so few points per frame, standard deviation and maximum are mostly noise, and the collapse happened before any learnable layer could tell signal from noise. The current loader keeps the raw points instead. It splits the sequence of raw frames into 32 contiguous temporal bins, concatenates all points that fall in one bin, and keeps at most 8 of them, preferring the strongest signal-to-noise ratio:</p>
+        <pre class="language-python"><code class="language-python">n = len(frames)
+edges = np.linspace(0, n, RADAR_LEN + 1).astype(int)
+pts = np.zeros((RADAR_LEN, RADAR_MAX_PTS, RADAR_POINT_FEATS), dtype=np.float32)
+mask = np.zeros((RADAR_LEN, RADAR_MAX_PTS), dtype=bool)
+
+for i in range(RADAR_LEN):
+    lo, hi = edges[i], max(edges[i + 1], edges[i] + 1)
+    merged = np.concatenate(frames[lo:hi], axis=0)
+    # ... point dropout (train only) ...
+    if len(merged) &gt; RADAR_MAX_PTS:
+        order = np.argsort(-merged[:, 4])   # snr_norm column
+        merged = merged[order[:RADAR_MAX_PTS]]
+    # ... xyz jitter (train only) ...
+    k = len(merged)
+    pts[i, :k] = merged
+    mask[i, :k] = True</code></pre>
+        <p>Binning has a clear advantage over the naive alternative. The raw recording has hundreds of frames and we want 32 steps. Nearest-frame sampling would throw most of the points away, while merging keeps all of them until the strongest ones are selected. The output has shape <code>[32, 8, 7]</code>: six point features plus a validity flag for the padded slots.</p>
+
+        <h3>IMU</h3>
+        <p>The IMU data comes from five wearable units, each providing a three-axis accelerometer and a three-axis gyroscope, which gives 30 channels. The loader is designed to keep only those two sensor types. Absolute angles, quaternions and magnetometer readings encode how a unit was mounted and in which session it was recorded, so they leak subject identity under a cross-subject split. Each device stream is resampled onto a grid of 400 steps spanning the clip, which normalizes every clip to the same length in relative time, and a device that is absent stays at zero. Channel-wise mean and standard deviation, fitted on the training split only, are applied afterwards by a small <code>Standardizer</code> class, since accelerometer and gyroscope channels use very different units.</p>
+
+        <h2>Backbones: one small network per sensor</h2>
+        <p>All backbones follow one contract. They take the tensor of their modality and return <code>[B, K, D]</code>, which is K tokens of width D, and they expose <code>embed_dim</code> and <code>num_tokens</code> as attributes. A dictionary maps modality names to builder functions, so the joint model can construct any subset of branches:</p>
+        <pre class="language-python"><code class="language-python">BUILDERS = {
+    "Depth_Color": depth_channel_backbone.build,
+    "IR": ir_channel_backbone.build,
+    "Thermal": thermal_channel_backbone.build,
+    "IMU": imu_channel_backbone.build,
+    "Radar": radar_channel_backbone.build,
+    "Skeleton": skeleton_transformer_backbone.build,
+}</code></pre>
+        <p>The budget is not split evenly. Depth gets the widest network, thermal frames are described in the code as low information and often missing, so that branch is narrower, and radar is called the weakest signal and gets the smallest budget.</p>
+
+        <h3>Frames: a 2D CNN followed by temporal convolutions</h3>
+        <p>For image sequences I avoided 3D convolutions, which are expensive, and split the problem in two. A shared 2D CNN encodes every frame independently, then a short stack of dilated 1D convolutions mixes the per-frame features along time. An adaptive pooling layer finally squeezes the time axis to K tokens:</p>
+        <pre class="language-python"><code class="language-python">class DepthColorBackbone(nn.Module):
+    def __init__(self, in_channels=3, widths=(32, 64, 128, 256),
+                 embed_dim=256, num_tokens=4):
+        super().__init__()
+        blocks, c = [], in_channels
+        for w in widths:
+            blocks += [ConvBlock2d(c, w, stride=2), ConvBlock2d(w, w)]
+            c = w
+        self.frame_net = nn.Sequential(*blocks)
+        self.temporal = nn.Sequential(
+            ConvBlock1d(c, embed_dim, k=3, dilation=1),
+            ConvBlock1d(embed_dim, embed_dim, k=3, dilation=2))
+        self.pool = nn.AdaptiveAvgPool1d(num_tokens)
+        self.embed_dim = embed_dim
+        self.num_tokens = num_tokens
+
+    def forward(self, x):
+        b, t, c, h, w = x.shape
+        f = self.frame_net(x.reshape(b * t, c, h, w))
+        f = f.mean(dim=(2, 3)).reshape(b, t, -1).transpose(1, 2)
+        f = self.temporal(f)
+        return self.pool(f).transpose(1, 2)</code></pre>
+        <p>Folding time into the batch dimension lets the whole clip go through the CNN in one call. Four stride-2 stages bring a 112 by 112 frame down to 7 by 7, and a spatial mean turns it into one vector per frame. The infrared and thermal backbones are subclasses that only change the input channels and the widths, which keeps them independently tunable without touching the depth branch.</p>
+
+        <h3>IMU: dilated convolutions</h3>
+        <p>For one-dimensional signals, dilated convolutions are a cheap way to see a long window <a href="#ref-5">[5]</a>. The IMU backbone stacks four blocks with kernel size 5 and dilations 1, 2, 4 and 8, the first two with stride 2:</p>
+        <pre class="language-python"><code class="language-python">class IMUBackbone(nn.Module):
+    def __init__(self, in_channels=30, widths=(64, 128, 128, 256),
+                 dilations=(1, 2, 4, 8), strides=(2, 2, 1, 1),
+                 embed_dim=256, num_tokens=3):
+        super().__init__()
+        layers, c = [], in_channels
+        for w, d, s in zip(widths, dilations, strides):
+            layers.append(ConvBlock1d(c, w, k=5, stride=s, dilation=d))
+            c = w
+        layers.append(ConvBlock1d(c, embed_dim, k=3))
+        self.net = nn.Sequential(*layers)
+        self.pool = nn.AdaptiveAvgPool1d(num_tokens)</code></pre>
+        <p>By my count, the receptive field of this stack is 221 steps of the 400-step grid, a bit more than half of the clip, which is enough to cover a whole short motion such as a sit-to-stand transition. Each block also contains dropout and a leaky ReLU, which is useful regularization for wearable data from a small number of subjects.</p>
+
+        <h3>Radar: pool the points, then attend over time</h3>
+        <p>The radar branch has two stages. The first one summarizes the points of each temporal bin. It resembles the symmetric-function idea of PointNet <a href="#ref-6">[6]</a>, since points are processed independently and then pooled with an order-invariant operation, but it uses a small 1D convolution over the point axis, followed by masked average and max pooling. The mask matters, because most bins have padded slots that must not take part in the max:</p>
+        <pre class="language-python"><code class="language-python">class CoarsePointPool(nn.Module):
+    def __init__(self, in_feats, hidden=32, out_dim=32):
+        super().__init__()
+        self.conv1 = ConvBlock1d(in_feats, hidden, k=3, stride=1, dilation=1)
+        self.conv2 = ConvBlock1d(hidden, hidden, k=3, stride=1, dilation=1)
+        self.proj = nn.Linear(hidden * 2, out_dim)  # avg + max concat
+
+    def forward(self, pts, mask):
+        B, T, N, F = pts.shape
+        x = (pts * mask.unsqueeze(-1)).view(B * T, N, F).transpose(1, 2)
+        h = self.conv1(x)
+        h = self.conv2(h) + h                       # skip connection
+        h = h.transpose(1, 2).view(B, T, N, -1)
+
+        m = mask.unsqueeze(-1)
+        count = m.sum(2).clamp(min=1)
+        avg = (h * m).sum(2) / count
+        mx = h.masked_fill(~m, float("-inf")).max(2).values
+        mx = torch.where(torch.isinf(mx), torch.zeros_like(mx), mx)
+
+        pooled = self.proj(torch.cat([avg, mx], dim=-1))
+        return torch.cat([pooled, count.log1p()], dim=-1)</code></pre>
+        <p>Note the last line. The number of points in a bin is itself informative, since a person who moves a lot reflects more radar points than a person sitting still, so its logarithm is appended as an extra feature. The second stage is a small transformer <a href="#ref-7">[7]</a> over the 32 per-bin embeddings, with learned positional embeddings and a skip connection around the whole stack, followed by pooling to tokens:</p>
+        <pre class="language-python"><code class="language-python">def forward(self, x):
+    pts = x[..., :-1]                       # [B, T, N, F]
+    mask = x[..., -1] &gt; 0.5                 # [B, T, N] bool
+    frame_emb = self.point_pool(pts, mask)  # [B, T, point_out+1]
+    h = self.in_proj(frame_emb)             # [B, T, embed_dim]
+    h = self.transformer(h)                 # [B, T, embed_dim]
+    f = h.transpose(1, 2)
+    return self.pool(f).transpose(1, 2)     # [B, num_tokens, embed_dim]</code></pre>
+
+        <h3>Skeleton: a transformer with a learned resampler</h3>
+        <p>The skeleton is the cleanest modality and gets the deepest network. Each frame is flattened to 51 numbers (17 joints times three coordinates) and linearly embedded, then a pre-norm transformer encoder <a href="#ref-7">[7]</a><a href="#ref-8">[8]</a> mixes frames across time. The default depth is 13 layers of width 128, which is cheap, because the sequence is only 64 frames long and the width is small.</p>
+        <p>The interesting part is how the variable-length sequence becomes a fixed number of tokens. Instead of average pooling, a small set of learned query vectors cross-attends into the encoded sequence, in the style of the Perceiver <a href="#ref-9">[9]</a>. The backbone also accepts a padding mask, so clips of different lengths could be padded instead of resampled, and two skip connections keep the deep stack easy to optimize:</p>
+        <pre class="language-python"><code class="language-python">def forward(self, x, mask=None):
+    b, t, j, c = x.shape
+    feats = x.reshape(b, t, j * c)
+    h0 = self.input_proj(feats)
+    h0 = h0 + sinusoidal_position_encoding(t, self.d_model, x.device, h0.dtype)
+
+    key_padding_mask = None if mask is None else ~mask.bool()
+    enc = self.encoder(h0, src_key_padding_mask=key_padding_mask)
+    enc = self.encoder_norm(enc + h0)        # stack-level residual
+
+    q = self.query.unsqueeze(0).expand(b, -1, -1)
+    pooled, _ = self.resampler(q, enc, enc, key_padding_mask=key_padding_mask)
+    pooled = self.resampler_norm(pooled + q) # resampler residual
+    return self.out_proj(pooled)</code></pre>
+        <p>The sinusoidal position encoding is computed for whatever length arrives, so there is no learned table with a hard maximum. The idea is that fixed-size requirements are pushed to the very last step and handled by attention, instead of by frame-index interpolation upstream.</p>
+
+        <h3>Using the skeleton graph</h3>
+        <p>A flat vector of 51 numbers ignores the fact that joints are connected. The repository therefore contains a second skeleton backbone, <code>spatial_skeleton.py</code>, that embeds each joint separately and applies one or two graph convolution hops over the bone graph, per frame, before the temporal transformer. This is the standard graph convolution of Kipf and Welling <a href="#ref-10">[10]</a>, used on skeletons in the spirit of ST-GCN <a href="#ref-11">[11]</a>. A residual connection keeps the per-joint identity alive:</p>
+        <pre class="language-python"><code class="language-python">class SpatialGCNBlock(nn.Module):
+    def __init__(self, channels, num_joints, edges, dropout=0.1):
+        super().__init__()
+        self.register_buffer("A", build_adjacency(num_joints, edges))
+        self.lin = nn.Linear(channels, channels)
+        self.norm = nn.LayerNorm(channels)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x):  # x: [B, T, J, C]
+        agg = torch.einsum("ij,btjc-&gt;btic", self.A.to(x.dtype), x)
+        out = self.drop(torch.relu(self.lin(agg)))
+        return self.norm(x + out)  # residual</code></pre>
+        <p>A companion file, <code>spatialized_skeleton_transformer.py</code>, goes one step further. It uses the symmetric normalization of the adjacency matrix and adds a small learnable edge gate on top of the anatomical graph. The gate is passed through a tanh and scaled by 0.1, so the network can add weak long-range links, for example between the two hands, but it cannot override the skeleton structure.</p>
+        <p>The graph variant also has a pretraining path, inspired by masked autoencoders <a href="#ref-12">[12]</a>. Random (frame, joint) entries are replaced by a learnable mask token, and a throwaway decoder reconstructs the hidden coordinates from the temporal encoder output. Because the decoder is discarded before fine-tuning, it does not count against the size budget:</p>
+        <pre class="language-python"><code class="language-python">def _embed_joints(self, x, joint_frame_mask=None):
+    h0 = self.joint_embed(x)  # [B, T, J, joint_ch]
+    if joint_frame_mask is not None:
+        h0 = torch.where(joint_frame_mask.unsqueeze(-1), self.mask_token, h0)
+    h = h0
+    for block in self.spatial_blocks:
+        h = block(h)
+    return h + h0
+
+def random_joint_frame_mask(b, t, j, ratio, device):
+    return torch.rand(b, t, j, device=device) &lt; ratio</code></pre>
+        <p>This is an experimental branch of the project, and the joint model currently builds the plain transformer skeleton backbone shown before.</p>
+
+        <h2>Fusion: tokens in, one decision out</h2>
+        <p>With six trained backbones, the <code>JointModel</code> class has two jobs: put the tokens in a common space and decide how to combine them. Each modality's tokens are projected to a shared width of 256 and tagged with two learned embeddings. One identifies the modality, the other the position of the token inside its modality. A learned CLS token is prepended, so the sequence has 1 + 6 x 4 = 25 entries, and a two-layer transformer encoder reads them:</p>
+        <pre class="language-python"><code class="language-python">self.branches = nn.ModuleDict({
+    m: BUILDERS[m](num_tokens=num_tokens, **bk.get(m, {}))
+    for m in self.modalities})
+self.projs = nn.ModuleDict({
+    m: nn.Linear(self.branches[m].embed_dim, fusion_dim)
+    for m in self.modalities})
+self.aux_heads = nn.ModuleDict({
+    m: nn.Linear(self.branches[m].embed_dim, n_classes)
+    for m in self.modalities})
+self.modality_emb = nn.Parameter(torch.zeros(len(self.modalities), fusion_dim))
+self.segment_emb = nn.Parameter(torch.zeros(num_tokens, fusion_dim))
+self.cls = nn.Parameter(torch.zeros(1, 1, fusion_dim))
+layer = nn.TransformerEncoderLayer(
+    fusion_dim, fusion_heads, fusion_dim * 2, dropout=fusion_dropout,
+    batch_first=True, norm_first=True)
+self.fusion = nn.TransformerEncoder(layer, fusion_layers, enable_nested_tensor=False)
+self.fusion_head = nn.Linear(fusion_dim, n_classes)</code></pre>
+        <p>The forward pass shows how missing data is handled. Each branch only runs on the rows of the batch where its modality exists, so zero-filled placeholders never touch BatchNorm statistics. Absent modalities are then excluded from attention through the key padding mask:</p>
+        <pre class="language-python"><code class="language-python">def forward(self, inputs, mask):
+    b = mask.size(0)
+    fusion_mask = self._dropped_mask(mask)
+    tokens, aux = [], {}
+    for j, m in enumerate(self.modalities):
+        br = self.branches[m]
+        t = inputs[m].new_zeros(b, br.num_tokens, br.embed_dim)
+        present = mask[:, j] &gt; 0
+        if present.any():
+            t[present] = br(inputs[m][present])
+        aux[m] = self.aux_heads[m](t.mean(dim=1))
+        tokens.append(self.projs[m](t)
+                      + self.modality_emb[j]
+                      + self.segment_emb)
+    x = torch.cat(tokens, dim=1)
+    pad = fusion_mask.repeat_interleave(self.num_tokens, dim=1) == 0
+    x = torch.cat([self.cls.expand(b, -1, -1), x], dim=1)
+    pad = torch.cat(
+        [torch.zeros(b, 1, dtype=torch.bool, device=x.device), pad], dim=1)
+    x = self.fusion(x, src_key_padding_mask=pad)
+    return self.fusion_head(x[:, 0]), aux</code></pre>
+
+        <h3>Modality dropout</h3>
+        <p>There is a catch. In the training set most clips have most modalities, but the test set has organically missing ones. A fusion layer trained only on complete inputs would learn to rely on its strongest sensor and collapse when it disappears. The remedy is modality dropout <a href="#ref-13">[13]</a>: during training, each present modality is hidden from the fusion stage with probability 0.3, while at least one is always kept:</p>
+        <pre class="language-python"><code class="language-python">def _dropped_mask(self, mask):
+    if not self.training or self.modality_dropout &lt;= 0:
+        return mask
+    drop = (torch.rand_like(mask) &lt; self.modality_dropout).float()
+    kept = mask * (1.0 - drop)
+    dead = kept.sum(dim=1) == 0
+    kept[dead] = mask[dead]
+    return kept</code></pre>
+        <p>Only the fusion mask is changed. The branches still run on every present modality, so the auxiliary losses below keep receiving a signal from all of them.</p>
+
+        <h3>Auxiliary heads</h3>
+        <p>Every branch has its own linear classifier on its mean-pooled tokens. Their cross-entropy is added to the main loss with weight 0.3, restricted to the samples where the modality really exists. This keeps each branch individually discriminative, so the fusion transformer cannot lazily ignore a weak modality and let its backbone drift to useless features:</p>
+        <pre class="language-python"><code class="language-python">def aux_loss(aux, mask, y, loss_fn):
+    total, count = 0.0, 0
+    for j, m in enumerate(MODALITIES):
+        pm = mask[:, j] &gt; 0
+        if pm.any():
+            total = total + loss_fn(aux[m][pm], y[pm])
+            count += 1
+    return total / max(count, 1)</code></pre>
+
+        <h2>Training in three steps</h2>
+        <p>The model is not trained end to end from random weights. Training happens in three stages, each with a script of its own.</p>
+        <p><strong>Stage 1: every backbone alone.</strong> The script <code>train_backbone_individual.py</code> trains one modality at a time with a linear head on the mean of its tokens. It uses AdamW <a href="#ref-14">[14]</a> with weight decay applied only to matrices, so biases and normalization parameters are not decayed, label smoothing of 0.1 <a href="#ref-15">[15]</a>, and a loss weighted by inverse class frequency:</p>
+        <pre class="language-python"><code class="language-python">counts = Counter(entry['label'] for entry in train_s)
+weights = torch.tensor([1.0 / counts[c] for c in range(NUM_CLASSES)])
+weights = weights / weights.sum() * NUM_CLASSES
+loss_fn = nn.CrossEntropyLoss(weight=weights.to(DEVICE), label_smoothing=LABEL_SMOOTHING)
+
+def build_param_groups(model, weight_decay):
+    decay, no_decay = [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        (no_decay if p.ndim &lt; 2 else decay).append(p)
+    return [
+        {"params": decay, "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]</code></pre>
+        <p>The learning rate follows a linear warmup over the first 5% of steps and then a cosine decay to 1% of its peak, stepped per batch. The best checkpoint by validation accuracy is saved, with both the backbone and its head, so that the head can later serve as the auxiliary classifier.</p>
+        <p>After this stage, a small script reads all the saved histories and prints a table of size and accuracy per modality. It also flags runs that do not learn, defined as a best accuracy below twice the chance level of 1/40, and runs that overfit, defined as a final validation loss more than 1.5 above the training loss:</p>
+        <pre class="language-python"><code class="language-python">def status(h):
+    best = h["best_val_acc"]
+    if best &lt; FAIL_FACTOR * CHANCE:
+        return "NOT LEARNING"
+    if h["val_loss"] and h["train_loss"]:
+        gap = h["val_loss"][-1] - h["train_loss"][-1]
+        if gap &gt; 1.5:
+            return "OVERFITTING"
+    return "OK"</code></pre>
+        <p><strong>Stage 2: fusion with frozen backbones.</strong> The joint model loads every <code>best.pt</code>, freezes all parameters whose name starts with <code>branches.</code>, and trains only the projections, the embeddings, the fusion transformer and the heads. Modality dropout is active here, which is the stage where robustness to missing inputs is learned.</p>
+        <p><strong>Stage 3: joint fine-tuning.</strong> Finally everything is trained together, with the backbones at a learning rate thirty times smaller than the fusion layers:</p>
+        <pre class="language-python"><code class="language-python">backbone_params, fusion_params = [], []
+for name, p in model.named_parameters():
+    (backbone_params if name.startswith("branches.")
+     else fusion_params).append(p)
+if STAGE == "fusion":
+    for p in backbone_params:
+        p.requires_grad = False
+    groups = [{"params": fusion_params, "lr": LR_FUSION}]
+else:
+    groups = [{"params": fusion_params, "lr": LR_FUSION},
+              {"params": backbone_params, "lr": LR_BACKBONE}]
+opt = torch.optim.AdamW(groups, weight_decay=WEIGHT_DECAY)</code></pre>
+        <p>The learning rates are 3e-4 for the fusion layers and 1e-5 for the backbones. Total loss in both joint stages is the main cross-entropy plus 0.3 times the auxiliary term, with gradient clipping at 1.0. The reason for the staged recipe is practical. Backbones are easy to debug alone, a dead branch shows up immediately in the comparison table, and the fusion stage starts from features that are already discriminative instead of from noise.</p>
+
+        <h2>Keeping an eye on the budget</h2>
+        <p>Every script reports size using the same helper, which counts parameters in fp32:</p>
+        <pre class="language-python"><code class="language-python">def param_size_mb(module):
+    return sum(p.numel() for p in module.parameters()) * 4 / 1e6</code></pre>
+        <p>The joint model's <code>size_report()</code> prints the cost of every branch, including its projection and auxiliary head, and then the fusion stage and the total. This is the number to compare against the 100 MB limit. Since the auxiliary heads are only useful for training, they could be dropped from the submitted weights, which gives some extra room. Running the report is also the quickest way to see which modality is expensive for what it brings.</p>
+
+        <h2>Limitations and what comes next</h2>
+        <p>This post describes the architecture and not its leaderboard result. Validation accuracy comes from a user-held-out split of the training users, which is small, so differences of a point or two between variants should not be trusted. Some ideas also remain unexplored in the final pipeline. The graph-based skeleton backbone and its masked pretraining are not part of the joint model yet, the radar and IMU branches could use stronger augmentation, and the late-fusion design only combines modalities at the token level, so it cannot learn fine-grained cross-modal timing.</p>
+
+        <h2>Conclusion</h2>
+        <p>The core of this entry is a division of labor. Loaders remove subject-specific cues one modality at a time, small backbones turn each signal into a few tokens, and a tiny transformer learns how to combine whatever is available. The presence mask, the modality dropout and the auxiliary heads are what make the system tolerant to missing sensors, which is the main practical difference between this dataset and a clean benchmark.</p>
+        <p>The broader lesson is the same one that makes older detectors such as Viola-Jones fun to study: with a hard compute budget, the structure of the model matters as much as its size. Here the structure is a set of cheap, specialized encoders and a small, flexible mixer, and it fits the problem well.</p>
+
+        <section class="references" aria-labelledby="references-title">
+          <h2 id="references-title">References</h2>
+          <ol>
+            <li><a id="ref-1" href="https://ubicomp.org/ubicomp-iswc-2026/cuhk-x-competition/" target="_blank" rel="noopener noreferrer">CUHK-X Multimodal Human Activity Challenge, UbiComp / ISWC 2026</a></li>
+            <li><a id="ref-2" href="https://arxiv.org/abs/2512.07136" target="_blank" rel="noopener noreferrer">CUHK-X: A Large-Scale Multimodal Dataset and Benchmarks for Human Activity Scene Understanding and Reasoning, arXiv:2512.07136</a></li>
+            <li><a id="ref-3" href="https://huggingface.co/datasets/Kevin-Pal/CUHK-X_Small_Model_Track" target="_blank" rel="noopener noreferrer">CUHK-X Small Model Track dataset card, Hugging Face</a></li>
+            <li><a id="ref-4" href="https://github.com/lorenzozanizz/cuhk-x-kaggle" target="_blank" rel="noopener noreferrer">lorenzozanizz, cuhk-x-kaggle repository</a></li>
+            <li><a id="ref-5" href="https://arxiv.org/abs/1803.01271" target="_blank" rel="noopener noreferrer">Shaojie Bai, J. Zico Kolter and Vladlen Koltun, “An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling,” 2018.</a></li>
+            <li><a id="ref-6" href="https://arxiv.org/abs/1612.00593" target="_blank" rel="noopener noreferrer">Charles R. Qi, Hao Su, Kaichun Mo and Leonidas J. Guibas, “PointNet: Deep Learning on Point Sets for 3D Classification and Segmentation,” CVPR 2017.</a></li>
+            <li><a id="ref-7" href="https://arxiv.org/abs/1706.03762" target="_blank" rel="noopener noreferrer">Ashish Vaswani et al., “Attention Is All You Need,” NeurIPS 2017.</a></li>
+            <li><a id="ref-8" href="https://arxiv.org/abs/2002.04745" target="_blank" rel="noopener noreferrer">Ruibin Xiong et al., “On Layer Normalization in the Transformer Architecture,” ICML 2020.</a></li>
+            <li><a id="ref-9" href="https://arxiv.org/abs/2103.03206" target="_blank" rel="noopener noreferrer">Andrew Jaegle et al., “Perceiver: General Perception with Iterative Attention,” ICML 2021.</a></li>
+            <li><a id="ref-10" href="https://arxiv.org/abs/1609.02907" target="_blank" rel="noopener noreferrer">Thomas N. Kipf and Max Welling, “Semi-Supervised Classification with Graph Convolutional Networks,” ICLR 2017.</a></li>
+            <li><a id="ref-11" href="https://arxiv.org/abs/1801.07455" target="_blank" rel="noopener noreferrer">Sijie Yan, Yuanjun Xiong and Dahua Lin, “Spatial Temporal Graph Convolutional Networks for Skeleton-Based Action Recognition,” AAAI 2018.</a></li>
+            <li><a id="ref-12" href="https://arxiv.org/abs/2111.06377" target="_blank" rel="noopener noreferrer">Kaiming He et al., “Masked Autoencoders Are Scalable Vision Learners,” CVPR 2022.</a></li>
+            <li><a id="ref-13" href="https://arxiv.org/abs/1501.00102" target="_blank" rel="noopener noreferrer">Natalia Neverova, Christian Wolf, Graham W. Taylor and Florian Nebout, “ModDrop: Adaptive Multi-Modal Gesture Recognition,” IEEE TPAMI, 2016.</a></li>
+            <li><a id="ref-14" href="https://arxiv.org/abs/1711.05101" target="_blank" rel="noopener noreferrer">Ilya Loshchilov and Frank Hutter, “Decoupled Weight Decay Regularization,” ICLR 2019.</a></li>
+            <li><a id="ref-15" href="https://arxiv.org/abs/1906.02629" target="_blank" rel="noopener noreferrer">Rafael Müller, Simon Kornblith and Geoffrey Hinton, “When Does Label Smoothing Help?,” NeurIPS 2019.</a></li>
+          </ol>
+        </section>
+      </article>
+    </main>
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-python.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>
