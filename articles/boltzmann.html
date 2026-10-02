@@ -63,7 +63,7 @@
   </div>
 </aside>
 
-        <p>The Hopfield network from the <a href="hopfield-networks.html">previous post</a> is a very good librarian. Give it ten digits and it will return those ten digits from damaged copies. Ask it for an eleventh digit, one that looks like the others but was never stored, and it has nothing to offer. It remembers examples; it does not learn where the examples come from.</p>
+        <p>The Hopfield network from the <a href="hopfield.html">previous post</a> is a very good librarian. Give it ten digits and it will return those ten digits from damaged copies. Ask it for an eleventh digit, one that looks like the others but was never stored, and it has nothing to offer. It remembers examples; it does not learn where the examples come from.</p>
         <p>The Boltzmann machine closes that gap. Ackley, Hinton and Sejnowski introduced it in 1985 as a stochastic Hopfield network with two changes: the weights are <em>learned</em> so that the network's equilibrium distribution matches the data, and some neurons are <em>hidden</em>, free to represent structure that the pixels do not show directly. The result is one of the first generative neural models. Twenty years later, stacks of restricted Boltzmann machines trained one layer at a time were part of the work that made deep networks trainable again, which is a large part of why I wanted to implement them.</p>
 
         <h2>An energy over visible and hidden units</h2>
@@ -144,8 +144,8 @@ weights *= (1 - lr * decay);</code></pre>
     out_location.noalias() = lower_semantic_weights * weights;
 }</code></pre>
         <p><code>visualize_kernels_depthwise</code> chains these products up the stack: <var>W</var><sub>0</sub><var>W</var><sub>1</sub> for the second layer, <var>W</var><sub>0</sub><var>W</var><sub>1</sub><var>W</var><sub>2</sub> for the third. The projection ignores the sigmoids between the layers, so it is a linear approximation of what the deep unit prefers, not an exact preferred input. It is still a good picture of how the features change with depth.</p>
-        <figure><img src="resources/associative_memory/Hopefield2.jpeg" alt="Kernels learned by stacked RBMs on binarised MNIST"><figcaption>Kernels learned on binarised MNIST. Each group of four comes from a different layer of the stack.</figcaption></figure>
-        <figure><img src="resources/associative_memory/kernel.png" alt="Nine kernels learned by an RBM on binarised face images" width="224" height="219"><figcaption>Nine kernels learned on binarised 64&nbsp;&times;&nbsp;64 face images. Many already look like whole faces with different lighting.</figcaption></figure>
+        <figure><img src="resources/boltzmann/Hopefield2.jpeg" alt="Kernels learned by stacked RBMs on binarised MNIST"><figcaption>Kernels learned on binarised MNIST. Each group of four comes from a different layer of the stack.</figcaption></figure>
+        <figure><img src="resources/boltzmann/kernel.png" alt="Nine kernels learned by an RBM on binarised face images" width="224" height="219"><figcaption>Nine kernels learned on binarised 64&nbsp;&times;&nbsp;64 face images. Many already look like whole faces with different lighting.</figcaption></figure>
 
         <h2>Letting the machine generate</h2>
         <p>A Hopfield network given a random state falls into one of its stored memories. An RBM given a random state can produce something new that resembles the training data, because it models a distribution instead of a list of patterns. The example starts the first machine from sparse noise, with 15&nbsp;% of the pixels on, and runs five steps of the chain at temperature 0.8:</p>
@@ -154,7 +154,6 @@ logger.set_collect_states(true, "boltzmann_states.gif", MNIST_SIZE, MNIST_SIZE);
 machine_0.attach_logger(&amp;logger);
 machine_0.random_visible(/* sparsity */ 0.15);
 machine_0.run_cd_k(5, false, 0.8);</code></pre>
-        <figure><div class="image-placeholder">boltzmann_states.gif: five steps of the chain from random noise</div><figcaption>The visible layer of the first RBM during five steps of alternating sampling, starting from random noise.</figcaption></figure>
 
         <h2>What the price was</h2>
         <p>The Boltzmann machine takes the Hopfield energy and turns it into a probability model with learned features, and the learning rule stays local and Hebbian at its core. The price is sampling. Every gradient step needs a Markov chain, and the quality of the gradient depends on how close that chain gets to equilibrium. Backpropagation in feed-forward networks later removed that cost and took over supervised learning, but the energy-based view survived in newer generative models.</p>
