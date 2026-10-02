@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
   <link rel="stylesheet" href="../style.css">
     <script src="../toc.js" defer></script>
+        <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
   <style>
     figure { margin: 1.6rem 0; }
     figure img { display: block; width: 100%; max-width: 640px; height: auto; }
@@ -26,13 +28,51 @@
         <time datetime="2026-09-29">29 September 2026</time>
         <h1>Computing with echoes: reservoir computing in C++</h1>
 
-        <p>Drop a stone into a pond and the surface keeps a record of it for a while. The ripples mix with the ripples of the stone before, and a careful observer who looks at the surface at one moment can say something about the recent history of stones. The pond does not learn anything. It has rich dynamics and a memory that fades.</p>
+
+        <aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/lorenzozanizz/associative-memory"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      associative-memory ↗
+    </a>
+  </div>
+</aside>        
+        <p>Drop a stone into a pond and the surface keeps a record of it for a while. The ripples mix with the ripples of the stone before, and a careful observer who looks at the surface at one moment can say something about the recent history of stones. The pond does not learn anything: it has rich dynamics and a memory that fades.</p>
         <p>Reservoir computing takes that picture literally. The three models earlier in this series, <a href="hopfield-networks.html">Hopfield networks</a>, <a href="boltzmann-machines.html">Boltzmann machines</a> and <a href="kohonen-maps.html">Kohonen maps</a>, treat each input as a static vector. Signals such as an electrocardiogram only make sense over time, and the usual tool for them, a recurrent network trained by backpropagation through time, is hard to train: gradients that pass through many time steps tend to vanish or explode. Around 2001 and 2002, Herbert Jaeger (echo state networks) and Wolfgang Maass with colleagues (liquid state machines) arrived independently at the same way around the problem: build a large recurrent network at random, <em>never train it</em>, and train only a readout that looks at its state.</p>
         <p>I find this the most surprising model in the repository. It moves almost all of the computation into a system that nobody optimised. Maass proposed it as a model of cortical microcircuits, and the same idea now runs on physical substrates such as optical and mechanical systems, because any medium with suitable dynamics can be the reservoir.</p>
 
         <h2>A random network that remembers</h2>
-        <p>The reservoir has a state <var>r</var>(<var>t</var>) of <var>N</var> units, a fixed input matrix <var>W</var><sub>in</sub> and a fixed recurrent matrix <var>W</var>. At each step it combines the previous state with the new input and applies a nonlinearity <var>g</var>:</p>
-        <span class="eq"><var>r</var>(<var>t</var>+1) = <var>g</var>(<var>W</var> <var>r</var>(<var>t</var>) + <var>W</var><sub>in</sub> <var>x</var>(<var>t</var>))</span>
+        <p>The reservoir has a state \(\textbf{r}(t)\) of \(N\) units, a fixed input matrix \(W_{in}\)and a fixed recurrent matrix \(W\). At each step it combines the previous state with the new input and applies a nonlinearity <var>g</var>:</p>
+        
+                      <div class="equation">\[
+         \textbf{r}(t+1)=g(W\textbf{r}(t) + W_{in} \textbf{x}(t)) 
+        \]
+      </div>
         <p>Classical echo state networks use <var>g</var>&nbsp;=&nbsp;tanh. This implementation uses a ReLU. The input is set with <code>feed</code> and consumed by the next call to <code>run</code>, so steps without input let the reservoir evolve freely:</p>
         <pre class="language-cpp"><code class="language-cpp">void run() {
     ReservoirState pre_activation;
@@ -50,7 +90,7 @@
         <p>The state is a matrix, not a vector: each column is an independent reservoir run. This lets a whole batch of sequences go through the same sparse&ndash;dense product at once.</p>
         <p>For the readout to be useful, the state must depend on the recent input history and not on how the reservoir was started. Jaeger called this the <em>echo state property</em>. The usual rule of thumb is to scale <var>W</var> so that its spectral radius, the largest absolute value of its eigenvalues, is below 1. Near 1 the echoes last long; well below 1 they fade quickly; above 1 the dynamics can amplify themselves and forget the input.</p>
 
-        <h2>Building the reservoir, and a trap in the scaling</h2>
+        <h2>Building the reservoir</h2>
         <p><code>initialize_echo_weights</code> draws a sparse matrix in which each entry is non-zero with probability <var>p</var> and Gaussian with standard deviation 1/&radic;<var>N</var>. It then estimates the spectral radius and rescales the matrix to the requested value:</p>
         <pre class="language-cpp"><code class="language-cpp">for (int i = 0; i &lt; state_dim; ++i)
     for (int j = 0; j &lt; state_dim; ++j) {
@@ -78,16 +118,10 @@ echo_weights.makeCompressed();</code></pre>
 }
 // If we reach here, we did not converge!
 return lambda_old;</code></pre>
-        <p>The power method converges when a single real eigenvalue dominates. A random non-symmetric matrix does not have one. By the circular law, the eigenvalues of this matrix fill a disc of radius about &sigma;&radic;(<var>Np</var>)&nbsp;=&nbsp;&radic;<var>p</var>, and the eigenvalues with the largest modulus are almost always complex pairs. The iterate keeps rotating in the plane of such a pair, and the Rayleigh quotient oscillates instead of converging.</p>
-        <p>A small NumPy check with the example's settings (<var>N</var>&nbsp;=&nbsp;625, <var>p</var>&nbsp;=&nbsp;0.1) shows how large the effect is. Over three random matrices the true spectral radius was 0.32 each time, while the power method, which returns its last estimate when it does not converge within 50 steps, gave 0.105, &minus;0.060 and 0.031. Rescaling with those estimates to a target of 0.5 gives a true radius of 1.5 in the first case and 5.1 in the third; the negative estimate skips the rescaling entirely.</p>
-        <p>The reservoir logger had already recorded the symptom. The example feeds a sine window once and lets the reservoir run freely for 20 steps:</p>
-        <figure><img src="resources/associative_memory/2_kernel.png" alt="Norm of the reservoir state over 20 free-running steps" width="628" height="377"><figcaption>Norm of the reservoir state after one input, with a requested spectral radius of 0.5.</figcaption></figure>
-        <p>The norm starts at 59, rises to about 73 and is still at 52 after 20 steps. In the same NumPy check, a reservoir whose true radius is 0.5 starts from the same norm of 59 and falls below 1 within four steps, while one with radius 1.5 grows steadily. The logged curve sits between the two, which is what a mis-scaled matrix would produce. For a 625-unit reservoir the exact radius is cheap to compute with a dense eigenvalue solver:</p>
-        <pre class="language-cpp"><code class="language-cpp">// Exact spectral radius; affordable for reservoirs of a few thousand units.
-Eigen::MatrixXd dense = Eigen::MatrixXd(echo_weights.template cast&lt;double&gt;());
-Eigen::EigenSolver&lt;Eigen::MatrixXd&gt; solver(dense, /* computeEigenvectors */ false);
-double current_radius = solver.eigenvalues().cwiseAbs().maxCoeff();</code></pre>
-        <p>For large reservoirs, an iterative method for non-symmetric matrices such as Arnoldi iteration, or the circular-law estimate &sigma;&radic;(<var>Np</var>) itself, gives a reliable value without forming the dense matrix.</p>
+        <p>A note is important here: the power method converges when a single real eigenvalue dominates. For arbitrary matrices, this may never happen. This method is only a heuristic, which is why a guard breaks after a sufficient number of iterations. </p>
+        <p>We can visualize the norm of the internal reservoir state over time with a logger class. The example feeds a sine window once and lets the reservoir run freely for 20 steps:</p>
+        <figure><img src="resources/reservoir/2_kernel.png" alt="Norm of the reservoir state over 20 free-running steps" width="628" height="377"><figcaption>Norm of the reservoir state after one input, with a requested spectral radius of 0.5.</figcaption></figure>
+        <p>The norm starts at 59, rises to about 73 and is still at 52 after 20 steps. For large reservoirs where stability may be critical, an iterative method for non-symmetric matrices such as Arnoldi iteration, or the circular-law estimate &sigma;&radic;(<var>Np</var>) itself, gives a reliable value without forming the dense matrix.</p>
 
         <h2>Turning a heartbeat into a vector</h2>
         <p>The application is heartbeat classification on the MIT-BIH arrhythmia data, in a preprocessed form where each sample is one beat of 187 values with one of five labels: normal, supraventricular ectopic, ventricular ectopic, fusion and unknown. <code>Reservoir::map</code> cuts each beat into windows of 25 values, feeds the windows in order and keeps the final state as the embedding of the whole beat:</p>
@@ -124,14 +158,10 @@ auto y = loss_function.generator().create_vector_variable(5);
 auto y_hat = loss_function.generator().create_vector_variable(5);
 loss_function = loss_function.generator().smce_logits_true(y, y_hat);</code></pre>
         <p>It is trained on 15,000 embedded beats for 120 epochs, with mini-batches of 250 and a learning rate of 0.001, and it is checked on 3,000 beats that it never sees during training. The reservoir weights do not change at any point: the gradient stops at the embedding.</p>
-        <figure><div class="image-placeholder">Verification loss of the readout over 120 epochs</div><figcaption>Cross-entropy on the 3,000 verification beats during training of the readout.</figcaption></figure>
-        <p>One number is a useful reference when reading this curve. MIT-BIH is dominated by normal beats, so a classifier that ignores its input and predicts the class frequencies already reaches a cross-entropy equal to the entropy of the label distribution. A readout on top of a working reservoir must go clearly below that level.</p>
-
+        <p> A description of the results is available in the repository discussion and in its example file.</p>
         <h2>Four principles, one repository</h2>
         <p>The reservoir finishes the series with the most extreme division of labour: a random dynamical system does the feature extraction, and learning touches only the last layer. It also shows why these older models are worth building by hand. A spectral radius is a single number in a configuration file, and it looks harmless, but whether the reservoir computes anything depends on how that number was obtained.</p>
         <p>Across the four posts, each model isolated one idea. Hopfield networks store memories as minima of an energy. Boltzmann machines turn the energy into a probability model with hidden features. Kohonen maps let competition and cooperation build a topology. Reservoirs compute with fixed dynamics and a trained readout. Modern architectures mix all four ideas, with attention as a form of associative recall, energy-based and sampling-based generation, sparse competitive routing and fixed random features, and each of them is easier to see in the small model where it first appeared.</p>
-
-        <nav class="series-nav" aria-label="Series navigation"><a href="kohonen-maps.html">&larr; Kohonen maps</a><span></span></nav>
 
         <section class="references" aria-labelledby="references-title">
   <h2 id="references-title">References</h2>

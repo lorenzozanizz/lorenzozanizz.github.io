@@ -21,7 +21,7 @@
     <a class="back-link" href="../index.html">&lt; Blog</a>
     <main class="article-page">
       <article>
-        <time datetime="2026-09-29">18 August 2026</time>
+        <time datetime="2026-08-18">18 August 2026</time>
         <h1>Modelling a depth sensor from a Blender scene</h1>
 
         <p></p>
@@ -29,7 +29,7 @@
         Every visible surface arrives with a precise distance, while a real depth image tends to have a usable range, uncertain silhouettes, and places where no measurement survives. 
         I wanted to see how far a few small, explicit changes could take a rendered frame toward the depth images used for action recognition.</p>
 
-        <p>The motivation was the CUHK-X action recognition challenge. In this setting, a multimodal model needs to recognize an action from non-RBG data sources (thermography, night vision, and more) over time.
+        <p>The motivation was the CUHK-X action recognition challenge. In this setting, a multimodal model needs to recognize an action from non-RGB data sources (thermography, night vision, and more) over time.
           For depth maps, each frame encodes distance rather than the room’s ordinary colors and textures.
            Synthetic motion can provide controlled examples, but the perfectly clean depth from a renderer looks different from the incomplete frames a depth sensor produces. The experiment here is about that gap in appearance, not a claim that the result reproduces the challenge sensor exactly.</p>
         <p>Thus we begin by modelling the environment inside Blender. We used a CC-Attribution Licensed living room model and free to use models from Adobe's Mixamo. The latter turned out to be 
@@ -47,7 +47,7 @@
         </figure>
 
         <h2>Starting from the EXR</h2>
-        <p>We will study the required passages to map a raw .EXR file generate with a single Blendeer compositing pass into a realistic depth footage frame. 
+        <p>We will study the required passages to map a raw .EXR file generate with a single Blender compositing pass into a realistic depth footage frame. 
           We will focus our analysis on a single frame, and then we will compare the end result for the entire animation with a real footage from the target dataset. 
         </p>
         <p>The supplied frame is a 640 × 480 OpenEXR with a single <code>Image.V</code> channel. Reading it as float32 preserves the scene distances. 
@@ -60,11 +60,11 @@ raw = exr.channel("Image.V", Imath.PixelType(Imath.PixelType.FLOAT))
 depth = np.frombuffer(raw, dtype=np.float32).reshape(height, width)
 valid = np.isfinite(depth) & (depth >= 3.0) & (depth <= 8.5)</code></pre>
         <figure><img src="resources/depth_sensor/clean-depth.png" alt="Clean range-limited depth frame with a person in the room" width="640" height="480"><figcaption>The Blender depth, mapped to a color palette for viewing. Black is outside the selected range.</figcaption></figure>
-        <p>The colors are only a display choice. We use the same color pallette as CUHK-X raw data, which is the JET pallette.
+        <p>The colors are only a display choice. We use the same color palette as CUHK-X raw data, which is the JET palette.
            The interesting part is the underlying distance field: it tells us where a person separates from the room, and where that separation might become less certain in a measured image.</p>
 
         <h2>Where real silhouettes get untidy</h2>
-        <p>At a sharp change in depth, neighboring pixels may belong to very different surfaces. Literature sources report that in real word depth footage, and indeed in the target dataset itself, this can cause discontinuities and noise at borders corresponding to sharp changes in altitude. 
+        <p>At a sharp change in depth, neighboring pixels may belong to very different surfaces. Literature sources report that in real-word depth footage, and indeed in the target dataset itself, this can cause discontinuities and noise at borders corresponding to sharp changes in altitude. 
           We detect these jumps using horizontal and vertical differences, then we find a small band around each edge. A distance transform lets every pixel in that band inherit the strength and direction of its nearest discontinuity.</p>
         <pre class="language-python"><code class="language-python">gx[:, :-1] = depth[:, 1:] - depth[:, :-1]
 gy[:-1, :] = depth[1:, :] - depth[:-1, :]
@@ -73,8 +73,9 @@ edge_mask = (gradient > 0.10) & np.isfinite(depth) & (depth > 0)
 distance, (iy, ix) = ndimage.distance_transform_edt(
     ~edge_mask, return_indices=True
 )</code></pre>
-        <p>From there, the model mixes a smooth random field with a finer one. The first can move a border coherently; the second roughens it. The width and strength grow with the depth jump. Sampling a displaced position across the edge would give a narrow, irregular transition instead of a perfectly cut-out figure.</p>
-        <p>There is a revealing detail in the current version of the script: it sets the whole selected band to <code>250</code>. Since 250 lies well beyond the 8.5 limit, those pixels become black. The computed displaced-depth blend on the following lines is never assigned. Here is the actual output from that code:</p>
+        <p>From there, the model mixes a smooth random field with a finer one. The first can move a border coherently; the second roughens it.
+           The width and strength grow with the depth jump. Sampling a displaced position across the edge would give a narrow, irregular transition instead of a perfectly cut-out figure.</p>
+        <p>For visualization of the effect, we set the whole selected band to a large number (<code>250</code>). Since 250 lies well beyond the 8.5 limit, those pixels become black. The computed displaced-depth blend on the following lines is never assigned. Here is the actual output from that code:</p>
         <figure><img src="resources/depth_sensor/boundary-effect.png" alt="Depth frame with black gaps along detected boundaries" width="640" height="480"><figcaption>The boundary effect as the supplied code currently renders it: missing pixels around the silhouettes.</figcaption></figure>
         <p>If the intention is to retain jittered depth instead of a missing-pixel band, that assignment can be replaced with the blend the function already calculates:</p>
         <pre class="language-python"><code class="language-python">corrupted[border_mask] = (
@@ -99,12 +100,12 @@ overlay = Image.open("sensor_disturbance.png").convert("RGBA")
 result = Image.alpha_composite(base, overlay)</code></pre>
         <p>A single frame makes the spatial effects easy to inspect. In a sequence, the random seed changes for each frame, so the disturbance will not necessarily move smoothly over time. The model is useful precisely because each effect can be changed on its own: range, edge width, displacement, and dropout can all be tuned without changing the Blender animation.</p>
       
-        <p> All that's left now is extract the camera lens border disturbance and paste it over synthetically generated frames. We will pack the full Mixamo squat animation into a GIF and compare it with a real footage available on the CUHK-X Action Recognition challenge dataset </p>
+        <p> All that's left now is to extract the camera lens border disturbance and paste it over synthetically generated frames. We will pack the full Mixamo squat animation into a GIF and compare it with real footage available on the CUHK-X Action Recognition challenge dataset </p>
       <div style="display: flex; gap: 1rem;">
       <img src="resources/depth_sensor/real.gif" alt="Real depth sensor" style="width: 50%; min-width: 0;">
       <img src="resources/depth_sensor/modelled.gif" alt="Modelled depth sensor" style="width: 50%; min-width: 0;">
       </div>
-      <p> We can see that the sensor model is properly reproducing the lens border distortion and the JET color pallette specified by the CUHK-X dataset. 
+      <p> We can see that the domain augmentation is qualitatively reproduces some visual characteristics of the lens border distortion and the JET color pallette specified by the CUHK-X dataset. 
         The noisy effect in the glass panel in our synthetic simulation is expected, as mirrors and reflective surfaces can cause disturbances in depth sensors and multiple recordings in the original dataset exhibit this behaviour.  </p>
       
       <section class="references" aria-labelledby="references-title">

@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A symbolic automatic differentiation engine in C++: expression DAGs, differentiation rules that emit nodes, algebraic simplification, compiled evaluation orders and a fused softmax cross-entropy gradient.">
+  <title>The derivative is another graph: automatic differentiation in C++ · Blog</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    figure { margin: 1.6rem 0; }
+    figure img { display: block; width: 100%; max-width: 640px; height: auto; }
+    figcaption { margin-top: .5rem; font-size: .9rem; opacity: .8; }
+    .image-placeholder { box-sizing: border-box; display: grid; place-items: center; max-width: 640px; min-height: 280px; padding: 2rem; border: 1px dashed currentColor; text-align: center; opacity: .7; }
+    .eq { display: block; margin: 1.1rem 0; overflow-x: auto; text-align: center; font-family: "Cambria Math", "STIX Two Math", Georgia, serif; font-size: 1.05rem; }
+    .series-nav { display: flex; justify-content: space-between; gap: 1rem; margin: 2.4rem 0 1rem; font-size: .95rem; }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <main class="article-page">
+      <article>
+        <time datetime="2026-09-29">29 September 2026</time>
+        <h1>The derivative is another graph: automatic differentiation in C++</h1>
+
+<aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/lorenzozanizz/associative-memory"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      associative-memory ↗
+    </a>
+  </div>
+</aside>
+
+        <p>The four models in this series so far share a property that is easy to miss: none of them has a loss function. The Hopfield network stores patterns with Hebb's rule. The restricted Boltzmann machine subtracts two correlations. The Kohonen map moves the winner and its neighbours. The reservoir readout fits a linear map. In every case the update rule was derived once, on paper, and then written into the code by hand. Change what you want the model to optimise and you rewrite the arithmetic.</p>
+        <p>That is the boundary this post crosses. The repository contains a small automatic differentiation engine in <code>src/math/autograd</code>, and it is the component that lets the user write the objective and lets the machine produce the gradient. It is also what the multilayer perceptron in <a href="reservoir-computing.html">the reservoir post</a> trains against.</p>
+        <p>The engine takes a specific approach, and the approach is the interesting part. It does not record operations while the program runs and replay them backwards. It builds the objective as an explicit graph of nodes, and then differentiates that graph into <em>a second graph</em>. Both graphs are then compiled into flat evaluation orders and run millions of times. The work of the chain rule happens once, at setup, rather than once per training sample.</p>
+
+        <h2>An expression is a graph of typed nodes</h2>
+        <p>Everything rests on one small class. An <code>ExpressionNode</code> carries a type tag, its children, and its shape:</p>
+        <pre class="language-cpp"><code class="language-cpp">class ExpressionNode {
+public:
+    const ExpressionType type;
+    // Note the reference to its own type, allowed because its just a pointer
+    std::vector&lt;ExpressionNode*&gt; children;
+    dim_t row;
+    dim_t col;
+
+    // Anonymous union to contain all the node data, this is a
+    // bit corny but reduces storage (which is significant when handling
+    // images)
+    union {
+        float vector_constant;
+        unsigned long expr_id;
+        unsigned long lp_norm;
+        unsigned long pow;
+    } expression_data;</code></pre>
+        <p>The union is worth pausing on. A node never needs more than one scalar payload: a constant needs its value, a power needs its exponent, a norm needs its <var>p</var>. Storing them in a union keeps every node the same small size regardless of type. The comment about images is the real motivation. A constant vector of 784 ones stores a single float and its column count, not 784 floats, because <code>ExpressionType::Constant</code> means "this value, repeated across the whole vector".</p>
+        <p>Nodes are never constructed directly. A <code>NodeGenerator</code> owns them all in one arena:</p>
+        <pre class="language-cpp"><code class="language-cpp">class NodeGenerator {
+    std::vector&lt;std::unique_ptr&lt;ExpressionNode&gt;&gt; nodes;
+public:
+    // Explicitly disallow copies, we are stories std::unique_ptr so
+    // compiler forbids us from having copy operators!
+    NodeGenerator(const NodeGenerator&amp;) = delete;</code></pre>
+        <p>This gives the graph a single owner with a single lifetime. Every node that belongs to one objective dies together when the generator does, and no node in the graph ever has to know who else points at it. That matters more than it first appears, because the graphs in this engine are not trees.</p>
+        <p>The generator is also where shape checking lives. Operations refuse mismatched operands when the node is built, not when it is evaluated:</p>
+        <pre class="language-cpp"><code class="language-cpp">inline ExpressionNode* sum(ExpressionNode* a, ExpressionNode* b) {
+    if (a-&gt;cols() != b-&gt;cols() || a-&gt;rows() != b-&gt;rows())
+        throw std::runtime_error("Cannot sum elements of different size");
+    return create_vector_op(ExpressionType::Add, { a, b }, a-&gt;cols(), a-&gt;rows());
+}</code></pre>
+        <p>Because the graph is built once and evaluated many times, a shape error surfaces during setup instead of in the middle of the training loop.</p>
+
+        <h2>Writing a loss and getting a graph</h2>
+        <p>The MLP example builds mean squared error. Two variables, a subtraction, a squared norm:</p>
+        <pre class="language-cpp"><code class="language-cpp">ScalarFunction loss_function;
+auto&amp; g = loss_function.generator();
+auto y = g.create_vector_variable(100);
+auto y_hat = g.create_vector_variable(100);
+loss_function = g.squared_l2_norm(g.sub(y, y_hat));</code></pre>
+        <p>A note on the names before we go further: in this example <code>y</code> is the variable that the network's output is bound to, and <code>y_hat</code> receives the ground truth. The trainer differentiates with respect to <code>y</code>. I keep the identifiers from the source below.</p>
+        <p><code>squared_l2_norm</code> is not a node type. It is two nodes, composed by the generator:</p>
+        <pre class="language-cpp"><code class="language-cpp">ExpressionNode* squared_l2_norm(ExpressionNode* expr) {
+    auto* lp = lp_norm(expr, 2);
+    return pow(lp, 2);
+}</code></pre>
+        <p>So the loss becomes a chain of four nodes over two variables. The shapes tell the story: the two variables and the subtraction carry 100 columns, and the norm collapses them to a single column that the power then keeps.</p>
+        <figure><img src="resources/associative_memory/AutoGrad.jpeg" alt="The expression graph of mean squared error and the graph of its derivative"><figcaption>Left: the graph of &Vert;<var>y</var> &minus; <var>&#375;</var>&Vert;<sup>2</sup>. Right: the graph the differentiator produces for its derivative. Both <code>LpNorm</code> and <code>LpNormDer</code> point at the same <code>Sub</code> node.</figcaption></figure>
+        <p>The right-hand graph is the output of the engine, and the arrows converging on <code>Sub</code> are the point of this post. The derivative graph does not copy the forward graph. It reuses its nodes.</p>
+
+        <h2>Differentiation builds a second graph</h2>
+        <p><code>ScalarFunction::derivative</code> takes an empty <code>VectorFunction</code> and fills it in:</p>
+        <pre class="language-cpp"><code class="language-cpp">void derivative(VectorFunction&lt;ScalarType&gt;&amp; func, VectorVar var, unsigned int optimize_steps = 10) {
+    // Compute the derivative of this scalar function with respect to a variable
+    Differentiator diff;
+    VectorExpression expr = diff.differentiate&lt;ScalarType&gt;(root, var, func.generator());
+    func = expr;
+}</code></pre>
+        <p>The types change on purpose. A <code>ScalarFunction</code> has a root of one column; its derivative with respect to a vector variable has as many columns as that variable, so it is a <code>VectorFunction</code>. The generator passed to <code>differentiate</code> belongs to the <em>derivative</em>, which means the new nodes are owned by the gradient while the nodes they reuse stay owned by the loss.</p>
+        <p>The traversal runs on an explicit stack with a cache keyed on the node pointer:</p>
+        <pre class="language-cpp"><code class="language-cpp">struct DiffFrame {
+    ExpressionNode* node;
+    std::vector&lt;ExpressionNode*&gt; dchildren;
+    bool ready;
+};</code></pre>
+        <pre class="language-cpp"><code class="language-cpp">if (!frame.ready) {
+    frame.ready = true;
+    // Push children
+    for (auto* child : node-&gt;get_children()) {
+        if (!cache.count(child)) {
+            st.push({ child, {}, false });
+        }
+    }
+}
+else {
+    // Fetch all derivatives from the mapping.
+    frame.dchildren.clear();
+    for (auto* child : node-&gt;get_children())
+        frame.dchildren.push_back(cache[child]);
+    ExpressionNode* dnode = differentiate_node(node, frame.dchildren, var, gen);
+    cache[node] = dnode;
+    st.pop();
+}</code></pre>
+        <p>Each frame is visited twice. The first visit pushes the children; the second visit reads their finished derivatives out of the cache and builds the node's own. The cache does two jobs at once. It guarantees that every node is differentiated once even when several parents share it, and it makes the traversal safe on a graph rather than only on a tree. Avoiding recursion is deliberate as well: a deep objective would otherwise put its depth on the C++ call stack.</p>
+        <p>The rules themselves are a flat dispatch on the node type, and each one <em>emits nodes</em> instead of computing numbers. The product rule is the clearest example:</p>
+        <pre class="language-cpp"><code class="language-cpp">else if (node-&gt;get_type() == ExpressionType::ScalarMultiply) {
+    auto left_d = dchildren[0];
+    auto left = node-&gt;get_children()[0];
+    auto right_d = dchildren[1];
+    auto right = node-&gt;get_children()[1];
+
+    return gen.sum(
+        gen.multiply(left_d, right),
+        gen.multiply(left, right_d)
+    );
+}</code></pre>
+        <p>Read <code>gen.multiply(left_d, right)</code> carefully. <code>right</code> is a node from the forward graph, inserted directly into the derivative graph as a child. This is where the sharing in the figure comes from. The chain rule needs the value of a subexpression, and rather than rebuilding that subexpression, the engine points at the one that already exists.</p>
+        <p>The power rule composes the same way, building three nodes out of one:</p>
+        <pre class="language-cpp"><code class="language-cpp">else if (node-&gt;get_type() == ExpressionType::ScalarPower) {
+    if (node-&gt;get_pow() == 1)
+        return dchildren[0];
+    else
+        return gen.multiply(
+            gen.multiply(
+                gen.pow(node-&gt;get_children()[0], node-&gt;get_pow() - 1),
+                node-&gt;get_pow()
+            ), dchildren[0]);
+}</code></pre>
+        <p>For the squared norm, <code>get_pow() - 1</code> is 1, and <code>gen.pow</code> returns its argument unchanged in that case, so the exponent node never appears. What remains is the <code>LpNorm</code> multiplied by the constant 2 and then by the derivative of the norm, which is exactly the <code>ScalarMul</code> and <code>VecScalMul</code> pair in the figure.</p>
+
+        <h2>Simplification pays off because losses are full of constants</h2>
+        <p>Derivative rules generate zeros. Every constant contributes one, and an objective written by a human is full of constants: targets, coefficients, thresholds. Left alone, those zeros would be multiplied and added at every evaluation for the rest of training. So <code>differentiate</code> ends with a rewrite pass that runs until it stops changing anything:</p>
+        <pre class="language-cpp"><code class="language-cpp">unsigned int performed_opts;
+do {
+    performed_opts = 0;
+    optimize(der, gen, performed_opts);
+} while (performed_opts &gt; 0);</code></pre>
+        <p>The rewrites are local algebraic identities, applied bottom-up on another explicit stack:</p>
+        <pre class="language-cpp"><code class="language-cpp">if (node-&gt;get_type() == ExpressionType::VectorScalarMultiply) {
+    if (children[0]-&gt;is_zero() || children[1]-&gt;is_zero())
+        return gen.zero(children[0]-&gt;cols(), children[1]-&gt;rows());
+}
+if (node-&gt;get_type() == ExpressionType::Add) {
+    if (children[0]-&gt;is_zero() &amp;&amp; children[1]-&gt;is_zero())
+        return gen.zero(children[0]-&gt;cols(), children[0]-&gt;rows());
+    if (children[0]-&gt;is_zero() &amp;&amp; !children[1]-&gt;is_zero())
+        return children[1];
+    if (!children[0]-&gt;is_zero() &amp;&amp; children[1]-&gt;is_zero())
+        return children[0];
+}</code></pre>
+        <p>The second demo in <code>main.cpp</code> shows how much this removes. It builds a ridge-regularised objective over a 30-dimensional variable:</p>
+        <pre class="language-cpp"><code class="language-cpp">ScalarFunction func; // a scalar function
+auto&amp; g = func.generator();
+auto u = g.create_vector_variable(30);
+const double lambda = 0.01;
+const auto expr = g.sum(
+    g.squared_l2_norm((g.sub(u, 1.0))),
+    g.multiply(lambda, g.squared_l2_norm(u))
+);
+func = expr;</code></pre>
+        <p>Differentiating this with respect to <code>u</code> produces three zeros before the rewrite pass runs. The constant vector of ones inside the subtraction gives one. The constant &lambda; gives another, which then multiplies a whole branch of the product rule. The third comes from that product itself. The rewrites collapse all three, and the surviving structure has one branch per term of the objective:</p>
+        <pre class="language-text"><code class="language-text">Sum[30]
+|-- VectorScalarMul[30]              d/du of ||u - 1||^2
+|   |-- ScalarMul[1]
+|   |   |-- LpNorm[1]  p=2   ------&gt; Sub[30] (shared with the loss graph)
+|   |   ^-- Const[1]   v=2
+|   ^-- LpNormDer[30]  p=2   ------&gt; Sub[30] (the same node again)
+^-- VectorScalarMul[30]              d/du of lambda*||u||^2
+    |-- Const[1] v=0.01
+    ^-- VectorScalarMul[30]
+        |-- ScalarMul[1]
+        |   |-- LpNorm[1] p=2 -----&gt; Var u[30]
+        |   ^-- Const[1]  v=2
+        ^-- LpNormDer[30] p=2 -----&gt; Var u[30]</code></pre>
+        <p>This is the shape of the graph, not a transcript of the program's output; <code>print_as_binary_tree</code> prints the same structure with node addresses and dimensions. Two things stand out. The product rule for &lambda;&nbsp;&times;&nbsp;&Vert;<var>u</var>&Vert;<sup>2</sup> has become a single scaled branch, because the term in which &lambda; was differentiated folded away. And <code>Var u</code> appears three times in the picture but exists once in memory, shared between the loss graph and both branches of its gradient.</p>
+
+        <h2>Compiling the graph into a flat order</h2>
+        <p>A graph is a poor thing to walk in an inner loop. Assignment therefore does more than store the root:</p>
+        <pre class="language-cpp"><code class="language-cpp">ScalarFunction&amp; operator= (ScalarExpression expr) {
+    if (expr != nullptr &amp;&amp; expr-&gt;is_2d() || expr-&gt;cols() != 1)
+        throw std::runtime_error("Cannot generate a scalar function from a vector expression!");
+    root = expr;
+    // This compiles the expression into a well defined evaluation ordering.
+    evaluate_graph_non_recursive_ordering(expr, this-&gt;eval_ordering);
+    return *this;
+}</code></pre>
+        <p>The ordering routine is a post-order traversal with a visited set, producing a vector in which every node appears after its children and exactly once. Evaluation then becomes a straight loop over that vector with a switch on the node type, writing each result into a cache:</p>
+        <pre class="language-cpp"><code class="language-cpp">for (ExpressionNode* node : eval_ordering) {
+    switch (node-&gt;get_type()) {
+    case ExpressionType::Sub: {
+        auto* a = node-&gt;get_children()[0];
+        auto* b = node-&gt;get_children()[1];
+        cache[node] = cache[a] - cache[b];
+        break;
+    }</code></pre>
+        <p>The cache is the reason the sharing in the derivative graph turns into real savings. <code>Sub</code> appears under both <code>LpNorm</code> and <code>LpNormDer</code>, but it appears once in the ordering, so <var>y</var>&nbsp;&minus;&nbsp;<var>&#375;</var> is computed once per evaluation and read twice. The comment in <code>apply</code> states the consequence plainly:</p>
+        <pre class="language-cpp"><code class="language-cpp">// Note: WE CANNOT ASSUME no-aliasing of the data vectors because the expression tree is
+// really an expression DAG because of memoization!</code></pre>
+        <p>DAG here means directed acyclic graph: a node may have several parents, but no path leads back to itself. That is precisely what the derivative rules build, and it is why the flat ordering has to be computed with a visited set rather than by walking children twice.</p>
+
+        <h2>Binding variables without copying</h2>
+        <p>Evaluation needs the numbers for the variables. They arrive through a map of references, not of values:</p>
+        <pre class="language-cpp"><code class="language-cpp">// Raw buffer from eigen vector.
+template &lt;typename ScalarType&gt;
+using EvalMap = std::map&lt;ExpressionNode*,
+    std::reference_wrapper&lt;EigVec&lt;ScalarType&gt;&gt;&gt;;</code></pre>
+        <p>and the result is written through an <code>Eigen::Ref</code>, which binds to memory the caller already owns:</p>
+        <pre class="language-cpp"><code class="language-cpp">void apply(const EvalMap&lt;ScalarType&gt;&amp; eval_data, Eigen::Ref&lt;EigVec&lt;ScalarType&gt;&gt; vec) {</code></pre>
+        <p>Together these two choices let a gradient be evaluated straight into a column of an existing matrix. That is exactly how the trainer uses it, and it is the last piece needed before the training loop makes sense.</p>
+
+        <h2>Where the engine sits in a training step</h2>
+        <p>The trainer differentiates the loss once, when it is given one:</p>
+        <pre class="language-cpp"><code class="language-cpp">void set_loss_function(LossFunction* loss, LastOutput var, LastOutput ground_truth) {
+    loss_function = loss;
+    loss_function-&gt;derivative(gradient_generator, var);
+    layer_variable = var;
+    ground_truth_variable = ground_truth;
+}</code></pre>
+        <p>After that call, <code>gradient_generator</code> holds a compiled graph, and no differentiation happens again for the rest of training. The per-batch work is binding and evaluating:</p>
+        <pre class="language-cpp"><code class="language-cpp">// Then we construct the batched gradient matrix
+timer.start("gradient");
+for (size_t i = 0; i &lt; batch.size(); ++i) {
+    VectorType out_col = batch_output.col(i);
+    VectorType true_col = batch.y_of(i);
+    loss_eval_map.clear();
+
+    loss_eval_map.emplace(layer_variable, out_col);
+    loss_eval_map.emplace(ground_truth_variable, true_col);
+    gradient_generator(loss_eval_map, batch_gradient.col(i));
+}
+timer.stop("gradient");
+
+// We then perform backpropagation
+timer.start("backprop");
+network.backward(batch_gradient);</code></pre>
+        <p>Notice what the engine is asked for, and what it is not asked for. It produces <code>batch_gradient</code>, the derivative of the loss with respect to the network's output. Nothing more. The derivatives with respect to the weights come from <code>MultiLayerPerceptron::backward</code>, which is ordinary matrix backpropagation and takes that gradient as its seed:</p>
+        <pre class="language-cpp"><code class="language-cpp">void backward(const Matrix&amp; dLoss_dA_L) {
+    int batch_size = dLoss_dA_L.cols();
+
+    // Output layer delta
+    delta[num_layers - 1] =
+        dLoss_dA_L.cwiseProduct(act_functions[num_layers - 2].df(Z[num_layers - 1]));
+
+    // Hidden layers
+    for (int l = num_layers - 2; l &gt;= 1; --l) {
+        delta[l].noalias() =
+            (W[l + 1].transpose() * delta[l + 1])
+            .cwiseProduct(act_functions[l - 1].df(Z[l]));
+    }</code></pre>
+
+        <h2>Why this division of labour suits neural networks</h2>
+        <p>A trained network has two very different kinds of derivative in it, and this design gives each one to the tool that handles it best.</p>
+        <p>The layer gradients are regular. Every layer computes the same operation, <var>W</var><var>a</var>&nbsp;+&nbsp;<var>b</var> followed by an elementwise nonlinearity, and its derivative is always a transposed matrix product and an elementwise multiply. The structure never varies, the matrices are large, and the work belongs in <code>W[l + 1].transpose() * delta[l + 1]</code>, where Eigen dispatches to a blocked kernel. There is nothing for a symbolic engine to discover here, and a general graph would stand between the training loop and the BLAS call.</p>
+        <p>The loss is the opposite. It is small, it is one vector wide, and it is the part the user actually changes: mean squared error today, cross-entropy tomorrow, either with a penalty term added. Writing its gradient by hand is where sign errors and missing factors come from, and it is the part that has to be rederived every time the objective changes. That is the work worth automating, and it is what the engine automates.</p>
+        <p>Three properties of the implementation follow from this split and are worth naming.</p>
+        <p><strong>The setup cost is paid once.</strong> Building the graph, differentiating it, simplifying it and computing two evaluation orders all happen before the first batch. A tape-based engine records the operations of every forward pass and walks the recording backwards, which means a fresh graph for every sample. Here the graph is a fixed object and the loop only pushes numbers through it. For a network that sees hundreds of thousands of samples, that is the right place to put the work.</p>
+        <p><strong>The gradient graph reuses the loss graph.</strong> Backpropagation needs forward values to compute backward ones, and this engine gets that by construction rather than by bookkeeping: the derivative rules insert the forward nodes themselves as children. The evaluation cache then computes each shared node once. In the MSE graph, <var>y</var>&nbsp;&minus;&nbsp;<var>&#375;</var> is computed once and used by both the norm and its derivative.</p>
+        <p><strong>Fused nodes carry the good gradient.</strong> The engine has a node for softmax cross-entropy taken as a unit, and its derivative rule is one line:</p>
+        <pre class="language-cpp"><code class="language-cpp">else if (node-&gt;get_type() == ExpressionType::SoftMaxCrossEntropy) {
+    auto logits = node-&gt;get_children()[0];
+    auto ref_val = node-&gt;get_children()[1];
+    return gen.sub(gen.softmax(logits), ref_val);
+}</code></pre>
+        <p>The derivative of the cross-entropy of a softmax with respect to the logits is the softmax minus the one-hot target. Composing that gradient out of an exponential, a sum and a logarithm would produce a much larger graph passing through the softmax Jacobian. Declaring the pair as one node gives the classifier's gradient as a single vector subtraction. The reservoir readout uses exactly this node:</p>
+        <pre class="language-cpp"><code class="language-cpp">ScalarFunction loss_function;
+auto y = loss_function.generator().create_vector_variable(5);
+auto y_hat = loss_function.generator().create_vector_variable(5);
+loss_function = loss_function.generator().smce_logits_true(y, y_hat);</code></pre>
+        <p>The forward evaluation of that node subtracts the maximum logit before exponentiating, the standard guard against overflow:</p>
+        <pre class="language-cpp"><code class="language-cpp">EigVec&lt;ScalarType&gt; softmaxed = (logits_val.array() - logits_val.maxCoeff()).exp().matrix();
+softmaxed /= softmaxed.sum();
+const ScalarType scalar_loss = -(true_val.array() * (softmaxed.array() + eps).log()).sum();</code></pre>
+        <p>Adding a new loss to the engine is therefore a contained job: an entry in <code>ExpressionType</code>, a factory method on the generator, a case in <code>differentiate_node</code> and a case in <code>eval_node</code>. The training loop does not change, because it only ever asks for the derivative of whatever root it was handed.</p>
+
+        <h2>The line between derived and written</h2>
+        <p>This module is where the repository stops encoding what a model should learn and starts deriving it. Hebb's rule, contrastive divergence and the Kohonen update are answers that somebody worked out and then transcribed. A graph plus a differentiator is a machine for producing such answers, and the price of a new objective drops from a derivation to a few lines of construction.</p>
+        <p>The design also says something about where automatic differentiation earns its cost. It is not a replacement for knowing the mathematics of your layers; the MLP's backward pass is still hand-written, and it is faster and clearer for being so. It is a tool for the part of a network that a researcher rewrites most often and reasons about least reliably. Drawing that line deliberately, rather than putting every operation behind the same abstraction, is what makes an engine this small useful at all.</p>
+        <p>There is a pleasing symmetry in where the series ends up. The Hopfield network in the first post computes with a graph whose edges are weights, and it settles into a minimum of an energy it cannot change. Here the graph's edges are operations, the minimum belongs to a function the user wrote, and the descent direction is produced by differentiating the graph itself.</p>
+
+        <section class="references" aria-labelledby="references-title">
+  <h2 id="references-title">References</h2>
+  <ol>
+    <li id="ref-1">Linnainmaa, S. (1976). &ldquo;Taylor expansion of the accumulated rounding error.&rdquo; <em>BIT Numerical Mathematics</em> 16(2), 146&ndash;160.</li>
+    <li id="ref-2"><a href="https://doi.org/10.1038/323533a0" target="_blank" rel="noopener noreferrer">Rumelhart, D. E.; Hinton, G. E.; Williams, R. J. (1986). &ldquo;Learning representations by back-propagating errors.&rdquo; <em>Nature</em> 323, 533&ndash;536.</a></li>
+    <li id="ref-3">Griewank, A.; Walther, A. (2008). <em>Evaluating Derivatives: Principles and Techniques of Algorithmic Differentiation</em>, 2nd edition. SIAM.</li>
+    <li id="ref-4"><a href="https://arxiv.org/abs/1502.05767" target="_blank" rel="noopener noreferrer">Baydin, A. G.; Pearlmutter, B. A.; Radul, A. A.; Siskind, J. M. (2018). &ldquo;Automatic differentiation in machine learning: a survey.&rdquo; <em>Journal of Machine Learning Research</em> 18(153), 1&ndash;43.</a></li>
+    <li id="ref-5"><a href="https://arxiv.org/abs/1912.01703" target="_blank" rel="noopener noreferrer">Paszke, A. et al. (2019). &ldquo;PyTorch: an imperative style, high-performance deep learning library.&rdquo; <em>Advances in Neural Information Processing Systems</em> 32.</a></li>
+    <li id="ref-6">Bridle, J. S. (1990). &ldquo;Probabilistic interpretation of feedforward classification network outputs, with relationships to statistical pattern recognition.&rdquo; In <em>Neurocomputing: Algorithms, Architectures and Applications</em>, Springer.</li>
+    <li id="ref-7"><a href="https://doi.org/10.1017/9781108860604" target="_blank" rel="noopener noreferrer">Mehlig, Bernhard (2021). <em>Machine Learning with Neural Networks: An Introduction for Scientists and Engineers.</em> Cambridge University Press.</a></li>
+    <li id="ref-8"><a href="https://arxiv.org/abs/1901.05639" target="_blank" rel="noopener noreferrer">Mehlig, Bernhard. <em>Machine learning with neural networks</em>, lecture notes, arXiv:1901.05639.</a></li>
+    <li id="ref-9"><a href="https://eigen.tuxfamily.org" target="_blank" rel="noopener noreferrer">Guennebaud, G.; Jacob, B. et al. <em>Eigen v3</em>.</a></li>
+    <li id="ref-10"><a href="https://github.com/lorenzozanizz/associative-memory" target="_blank" rel="noopener noreferrer">Zani, Lorenzo. <em>associative-memory</em>: a pure C++ learning resource for foundational machine learning. GitHub repository.</a></li>
+  </ol>
+</section>
+
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/prism.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-c.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-cpp.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js"></script>
+</body>
+</html>

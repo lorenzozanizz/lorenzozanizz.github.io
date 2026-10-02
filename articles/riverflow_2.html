@@ -24,9 +24,9 @@
         <time datetime="2026-09-29">29 September 2026</time>
         <h1>From columns to training pairs</h1>
 
-        <p><em>RiverFlow data loader, part 2 of 3.</em> Previous: <a href="riverflow-loader-1-five-sections.html">A small language for loading messy data</a> · Next: <a href="riverflow-loader-3-assumptions.html">What the aligner assumes</a></p>
+        <p><em>RiverFlow data loader, part 2 of 2.</em> Previous: <a href="riverflow_1.html">A small language for loading messy data</a></p>
 
-        <p>At the end of <a href="riverflow-loader-1-five-sections.html">part 1</a>, every variable was a clean NumPy array: a column of rainfall values, a column of dates, a 1839 × 24 matrix of hourly river levels. A forecasting model needs something else. It needs samples, and each sample combines several variables over a stretch of time: the river over the last month, the rain over the last week and the next few days, and as target, the river over the coming week.</p>
+        <p>At the end of <a href="riverflow_1.html">part 1</a>,every variable was a clean NumPy array: a column of rainfall values, a column of dates, a 1839 × 24 matrix of hourly river levels. A forecasting model needs something else. It needs samples, and each sample combines several variables over a stretch of time: the river over the last month, the rain over the last week and the next few days, and as target, the river over the coming week.</p>
         <p>Building those samples by hand is where off-by-one errors live. The sources also start on different days. The Lozzolo weather station begins on 1 October 2001, the river series on 23 March 2018. Every window has to be measured from the same day in every file, and every sample has to have all its windows complete. The <code>.make</code> section describes this in a few lines, and its interpreter logs enough numbers that you can check the result by hand. This post does that check for three examples from the repository <a href="#ref-1">[1]</a>.</p>
 
         <h2>A plan describes one sample around a moving day</h2>

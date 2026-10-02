@@ -29,8 +29,44 @@
     <a class="back-link" href="../index.html">&lt; Blog</a>
     <main class="article-page">
       <article>
-        <time datetime="2026-09-29">29 September 2026</time>
+        <time datetime="2026-02-25">25 February 2026</time>
         <h1>Making a ventricle move</h1>
+
+
+<aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/lorenzozanizz/cardiac-ventricle-mechanics"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      cardiac-ventricle-mechanics ↗
+    </a>
+  </div>
+</aside>
+
         <p class="dek">A heart model has to do more than shrink. It has to stretch under pressure, resist motion differently along its fibers and produce a plausible twist when it contracts. Here is how we built and checked a finite element model of the left ventricle.</p>
         <p class="byline">Tommaso Viganò, Davide Mauri, Tommaso Roncaglio and Lorenzo Zani</p>
 
@@ -61,6 +97,7 @@
         <p>We split the ventricular wall into finite elements and approximate displacement with functions defined on the mesh. The weak form asks that the combined internal, pressure and outer-support forces do zero virtual work for every permitted small test displacement. That gives a nonlinear system for the mesh's displacement values:</p>
         <div class="equation">\[\mathcal{R}(\mathbf{u}_h)=\mathbf{0},\qquad \mathbf{J}_{\mathcal{R}}(\mathbf{u}_h^{,n})\,\Delta\mathbf{u}_h=-\mathcal{R}(\mathbf{u}_h^{,n}).\]</div>
         <p>We implemented the three-dimensional solver in C++ with deal.II.<sup><a href="#ref-dealii" aria-label="Reference 4">[4]</a></sup> Newton iterations repeatedly assemble a residual and its Jacobian, solve for an update and adjust the displacement. The implementation evaluates the stress derivatives for the material terms and the changing pressure boundary. A damped update and occasional reuse of the Jacobian help with the nonlinear solve. We also built reduced versions using automatic differentiation, which obtains a Jacobian by differentiating the coded residual and gives us another route for checking the implementation.</p>
+        <p>We use a mesh with 30 thousand DOFs and elements of second order using a deal.II TRILU preconditioner. </p>
         <p>A practical detail is easy to miss: the local fiber frame must be recomputed consistently at integration points. An accurate nonlinear solver cannot rescue a contraction force applied in the wrong direction.</p>
 
         <h2>Checking the motion</h2>
@@ -69,17 +106,20 @@
         <p>For the main ventricular model, we explored the strength of the outer support at an end-diastolic pressure of 1 kPa. The manuscript tests \(\alpha\) values of 75, 7.5, 3.75 and 0.75 mmHg/cm on a mesh with 1 mm elements. Inspection of basal strain against the reference data led us to use 7.5 mmHg/cm for the reported examples.<sup><a href="#ref-barbarotta" aria-label="Reference 2">[2]</a></sup> That is a calibration within this geometry and material model, not a universal stiffness of the pericardium.</p>
         <figure>
             <img src="./resources/cardiac/strains.png">
-          <figcaption>End-diastolic circumferential, longitudinal and radial strains at the basal section for the tested outer-support stiffness values. Replace with the manuscript's <code>strains.png</code>.</figcaption>
+          <figcaption>End-diastolic circumferential, longitudinal and radial strains at the basal section for the tested outer-support stiffness values.</figcaption>
         </figure>
         <p>Under pressure the simulated chamber expands. With activation the wall moves inward and the chamber volume falls. The manuscript illustrates these two regimes using a 1 kPa end-diastolic pressure and a 10 kPa end-systolic loading case with activation parameters \(S_n=3.5\) and \(\beta=1.0\). These are qualitative outcomes in the provided results; a full pressure–volume validation is still a separate task.</p>
         <figure>
-            <img src="./resources/cardiac/external.png">
-          <figcaption>Use the manuscript's passive inflation and active contraction images side by side. The source captions call the loads “LVEDV” even though they are given in kPa; the pressure terminology in this post follows the results text.</figcaption>
+          <div style="display: flex;">            
+            <img src="./resources/cardiac/external.png" style="width: 50%;">
+            <img src="./resources/cardiac/active.png" style="width:50%;"></div>
+
+          <figcaption>A comparison of the simulated ventricular chamber expansion and contraction. On the left, the ventricle expands as blood flows inside the chamber. On the right, the ventricle contracts due to fiber activation, pushing blood outwards. The original mesh is the white ghost lattice.</figcaption>
         </figure>
         <p>The most revealing check is twist. Because fibers change orientation across the wall, rotation should vary along the ventricle. Our slice analysis reports a reversal of twist from the basal region toward the apex at the end-diastolic loading case. The manuscript also notes a sharp feature near the apex, where its prescribed fiber field changes rapidly. That local behavior deserves care when interpreting the curve rather than being smoothed away in the story.</p>
         <figure>
                         <img src="./resources/cardiac/twist.png">
-          <figcaption>Rotation measured at slices along the ventricle. Replace with the manuscript's <code>twist.png</code>; inspect its apex region and the sign convention for rotation.</figcaption>
+          <figcaption>Rotation measured at slices along the ventricle. Notice the singularity at the base of the ventricle, where the helical structure of the ventricle fibers collapse.</figcaption>
         </figure>
 
         <h2>What this model earns us</h2>

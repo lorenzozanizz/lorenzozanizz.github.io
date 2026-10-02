@@ -27,6 +27,42 @@
         <time datetime="2026-09-29">29 September 2026</time>
         <h1>From recall to generation: restricted Boltzmann machines in C++</h1>
 
+
+
+<aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/lorenzozanizz/associative-memory"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      associative-memory ↗
+    </a>
+  </div>
+</aside>
+
         <p>The Hopfield network from the <a href="hopfield-networks.html">previous post</a> is a very good librarian. Give it ten digits and it will return those ten digits from damaged copies. Ask it for an eleventh digit, one that looks like the others but was never stored, and it has nothing to offer. It remembers examples; it does not learn where the examples come from.</p>
         <p>The Boltzmann machine closes that gap. Ackley, Hinton and Sejnowski introduced it in 1985 as a stochastic Hopfield network with two changes: the weights are <em>learned</em> so that the network's equilibrium distribution matches the data, and some neurons are <em>hidden</em>, free to represent structure that the pixels do not show directly. The result is one of the first generative neural models. Twenty years later, stacks of restricted Boltzmann machines trained one layer at a time were part of the work that made deep networks trainable again, which is a large part of why I wanted to implement them.</p>
 
@@ -123,8 +159,6 @@ machine_0.run_cd_k(5, false, 0.8);</code></pre>
         <h2>What the price was</h2>
         <p>The Boltzmann machine takes the Hopfield energy and turns it into a probability model with learned features, and the learning rule stays local and Hebbian at its core. The price is sampling. Every gradient step needs a Markov chain, and the quality of the gradient depends on how close that chain gets to equilibrium. Backpropagation in feed-forward networks later removed that cost and took over supervised learning, but the energy-based view survived in newer generative models.</p>
         <p>Both models so far describe the data with an energy. The next post drops the energy completely. A Kohonen map learns with a different principle, competition between units arranged on a grid, and it gives something the RBM does not: a picture of the data in which similar inputs land next to each other.</p>
-
-        <nav class="series-nav" aria-label="Series navigation"><a href="hopfield-networks.html">&larr; Hopfield networks</a><a href="kohonen-maps.html">Kohonen maps &rarr;</a></nav>
 
         <section class="references" aria-labelledby="references-title">
   <h2 id="references-title">References</h2>

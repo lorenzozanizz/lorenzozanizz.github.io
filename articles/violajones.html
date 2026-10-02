@@ -25,13 +25,13 @@
 	
 	<p> The year is 2001. Before neural networks, engineers had to be creative when detecting faces in footage and images. Since compute was scarce, efficiency was critical.</p>
         <p>Viola–Jones is an early face-detection model that is still a beauty to study  <a href="#ref-3">[4]</a>  <a href="#ref-4">[5]</a>.
-Its speed was unparalleled, and it came from several ideas working together. Firstly, it was a boosting algorithm: AdaBoost is used to turn a huge menu of simple visual tests into a compact classifier. Another ingredient are the filters: they describe local contrast and are simple enough to be generated synthetically. Last but not least, an integral image for the entire image (not just each cell) is computed, making  those tests extremely cheap to evaluate. A cascade then spends most of its effort rejecting easy background windows.</p>
+Its speed was unparalleled, and it came from several ideas working together. Firstly, it was a boosting algorithm: AdaBoost is used to turn a huge menu of simple visual tests into a compact classifier. Another ingredient is the filters: they describe local contrast and are simple enough to be generated synthetically. Last but not least, an integral image for the entire image (not just each cell) is computed, making  those tests extremely cheap to evaluate. A cascade then spends most of its effort rejecting easy background windows.</p>
 
         <p>To study those ideas in depth, we'll be exploring a Python implementation I stumbled upon online: <a href="https://github.com/Donny-Hikari/Viola-Jones" target="_blank" rel="noopener noreferrer">Donny-Hikari/Viola-Jones</a>. The explanations below combine the repository’s code, its detection entry point and the original Viola–Jones papers.</p>
 
         <h2>What the detector is looking for</h2>
         <p>A face is not recognized from a single pixel or color. The classic Viola–Jones detector asks whether small rectangular regions have particular average brightness relationships. A two-rectangle filter, for example, subtracts the sum of pixels in one region from the sum in its neighbor. Other filters compare three or four regions. Several variations of those feature exist, but their effect is always similar to the features considered in the original paper.</p>
-        <p>These filters are often called Haar-like features because their patterns resemble Haar wavelets <a href="#ref-1">[1]</a>. The original method evaluates a very large set of candidate rectangles at different positions and sizes. During training, AdaBoost will selects a small set of useful tests and will combine them into a stronger classifier.</p>
+        <p>These filters are often called Haar-like features because their patterns resemble Haar wavelets <a href="#ref-1">[1]</a>. The original method evaluates a very large set of candidate rectangles at different positions and sizes. During training, AdaBoost will select a small set of useful tests and will combine them into a stronger classifier.</p>
 
         <figure>
           <img src="resources/violajones/haarlikefeatures.png" alt="Four diagrams of Haar-like features: left-right, top-bottom, three-stripe, and checkerboard rectangles">
@@ -41,7 +41,7 @@ Its speed was unparalleled, and it came from several ideas working together. Fir
         <p>The filter design is part of the model’s appeal. Instead of asking a learned network to make up a useful representation, introducing questions about interpretability, Viola–Jones starts with simple geometric patterns: perhaps a bright strip beside a dark strip, or a center band that differs from the bands around it. Such tests are easy to compute and can weakly respond to face structure, like the contrast between the eye region and cheeks. No one filter is a face detector by itself: the selected filters must work together to achieve an acceptable result.</p>
 
         <h2>The integral image is a clever trick</h2>
-        <p>A straightforward rectangle filter would add up every pixel in each rectangle. While this would not be a problem for modern GPUs, in limited compute environments like CCTV or small camera edge processors that quickly adds up. Recomputing local sums wastes a lot of work: as hundreds of filter slide across an image changing size, we may be repeating the same local sums hundreds if not thousands of times. Here comes the clever trick: use an integral image, also called a summed-area table, to store cumulative pixel sums. At each location, it records the sum of all pixels above and to the left.</p>
+        <p>A straightforward rectangle filter would add up every pixel in each rectangle. While this would not be a problem for modern GPUs, in limited compute environments like CCTV or small camera edge processors that quickly adds up. Recomputing local sums wastes a lot of work: as hundreds of filters slide across an image changing size, we may be repeating the same local sums hundreds if not thousands of times. Here comes the clever trick: use an integral image, also called a summed-area table, to store cumulative pixel sums. At each location, it records the sum of all pixels above and to the left.</p>
 
         <p>Once that map is computed, any rectangular sum comes from four values at its corners. Subtract the two outer strips, then add back the overlap that was subtracted twice. So a small filter can get its rectangle sums in a low fixed number of operations, whatever the rectangle’s area is. Note however that the map is not itself a set of pixel differences, rather it is a compact cache that makes those later differences fast and cheap.</p>
 
@@ -58,7 +58,7 @@ def integral_image(gray):
     return np.pad(gray, ((1, 0), (1, 0))).cumsum(axis=0).cumsum(axis=1)
 
 def rectangle_sum(ii, x0, y0, x1, y1):
-    # Coordinates describe [x0:x1, y0:y1): right and bottom are excluded.
+    # Coordinates describe [x0:x1, y0:y1]: right and bottom are excluded.
     return ii[y1, x1] - ii[y0, x1] - ii[y1, x0] + ii[y0, x0]
 
 ii = integral_image(gray.astype(np.int64))
@@ -66,11 +66,11 @@ left = rectangle_sum(ii, 10, 8, 18, 24)
 right = rectangle_sum(ii, 18, 8, 26, 24)
 left_right_feature = left - right</code></pre>
 
-        <p>For a two-rectangle filter, the response is one box sum minus the other. Three and four-rectangle features add or subtract more box sums, so that the price to compute a filter scales linearly in the number of uniform patches. The cumulative table is built once for each image window, and then every candidate filter gets its sums from a small number of array reads.</p>
+        <p>For a two-rectangle filter, the response is one box sum minus the other. Three and four-rectangle features add or subtract more box sums, so that the price to compute a filter scales linearly in the number of uniform patches.</p>
 
         <h2>Boosting turns many tests into a detector</h2>
         <p>The feature space is clearly enormous, but most candidate tests are only extremely weakly informative for recognizing faces. AdaBoost repeatedly chooses a weak classifier that helps separate face windows from non-face windows, gives more weight to the examples it currently gets wrong, and combines the selected classifiers with learned weights. 
-Unlike models like random forests, boosting allows new entries to the filter collection to make up for the errors of its predecessors. 
+Unlike models like random forests, boosting trains weak learners sequentially while emphasizing previously misclassified examples to make up for the errors of earlier learners. 
 In this setting, a weak classifier can be a threshold on one feature response.</p>
         <p>The useful detail is that boosting does two jobs at once: it trains a classifier and selects which visual features the classifier needs. The final decision focuses on a small, informative subset of the generated candidate filters. That is a beautiful coupling of learning and engineering: feature selection directly reduces the work at detection time.</p>
 

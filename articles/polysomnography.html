@@ -33,8 +33,8 @@
     <a class="back-link" href="../index.html">&lt; Blog</a>
     <main class="article-page">
       <article>
-        <time datetime="2026-09-29">29 September 2026</time>
-        <h1>EEG polysomnography: predicting sleep apnoea with transformers</h1>
+        <time datetime="2026-06-20">20 June 2026</time>
+        <h1>EEG polysomnography: attention models for predicting sleep apnoea</h1>
 
 <aside aria-label="GitHub repository"
   style="display:flex; align-items:center; gap:16px; max-width:620px;
@@ -126,13 +126,18 @@ ahi_estimate = self.regression_head(shared)</code></pre>
 
         <p>The shared part matters. Classification can push the representation toward the presence of disease, while regression asks it to retain differences in severity. In the binary prototype, the loss combines binary cross-entropy with an AHI mean-squared error applied to symptomatic examples. A later three-class attention-pooling experiment uses class-weighted cross-entropy and an AHI loss for the two non-healthy groups. These are concrete design choices, not evidence that joint training always improves either task.</p>
 
-        <p>Self-attention produces a window-by-window relationship matrix. The simpler pooling model instead assigns one scalar score to each window and forms a weighted sum. The distinction matters when interpreting saliency: a high pooling weight says a window contributed strongly to that learned summary, but it is not a verified apnoea event marker. The prototype also has no explicit positional encoding or padding mask in its shown forward pass. Its window order and any padded windows need careful treatment before interpreting attention as a map of sleep physiology.</p>
+        <p>The self-attention mechanism of transformers produces a window-by-window relationship matrix. The simpler pooling model instead assigns 
+          one scalar score to each window and forms a weighted sum.
+          We must be careful when interpreting saliency physiologically: a high pooling weight says a window contributed strongly to that learned summary,
+            but it is not a verified apnoea event marker. While it is natural to imagine that to predict the severity of sleep apnoea the model would need to effectively
+            count the number of attacks during the night, we should remain cautious and not directly interpret saliency spikes as attacks. 
+          </p>
 
         <figure class="wide-figure"><img src="resources/polysomno/predicte.png" alt="True versus predicted AHI scatter for the reported neural regression experiment" loading="lazy"><figcaption>Reported true versus predicted AHI. Read this as an exploratory neural-model plot: the visible scripts select an attention-pooling model for training, while the multihead transformer is defined as a separate prototype. A full-dataset scatter, if used, includes training nights and is not held-out performance.</figcaption></figure>
 
-        <p>That final distinction is the honest end of the story. The code contains a useful transformer architecture with a shared multimodal backbone, but the visible training path in <code>joint_model.py</code> comments out <code>TransformerAttention</code> and instantiates <code>SimpleAttention</code>; <code>joint_multinomial.py</code> also trains <code>SimpleAttention</code>. The regression image can illustrate the neural experiment, but it cannot establish a patient-held-out transformer result on its own. With only 78 usable nights and 40 people, a more flexible model can memorize an attractive curve. The next convincing experiment would train the transformer and the pooling baseline under identical patient-grouped splits, with all fitted preprocessing confined to each training fold, and compare both against an ODI-aware tabular baseline.</p>
-
-        <p>The progression from logistic regression to attention was worthwhile because it sharpened the question. Power features made the signal manageable; classical models exposed the hard middle cases; the shared backbone offered a way to learn from both the night's sequence and the patient table. The remaining challenge is to show that the extra temporal machinery generalizes to people it has never seen.</p>
+        <p>Our progression of models was a worthwhile study because it sharpened the question.
+           Using power features made the huge EEG signal manageable, and classical models exposed the hard middle cases. When we needed to integrate meaningfully the temporal data of EEGs to physiological data of the patients, our architecture with a shared backbone came into play. 
+           The remaining challenge is to show that the extra temporal machinery generalizes to people it has never seen, and unfortunately that would require more data than available, especially with data-hungry models like transformers..</p>
 
         <section class="references" aria-labelledby="references-title">
           <h2 id="references-title">References</h2>

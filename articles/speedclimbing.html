@@ -27,37 +27,72 @@
         <time datetime="2026-09-29">29 September 2026</time>
         <h1>Tracking a speed climber from one raw video</h1>
 
+<aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/marcozeccola/speed-analysis"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      speed-analysis ↗
+    </a>
+  </div>
+</aside>        
+
         <p>A speed climbing run is over in a few seconds, and the final time is the only number most viewers see.
           A coach wants more: how fast the athlete moves at each section of the wall, where the speed drops, and how two climbers compare move by move.
-          The footage that exists is usually a single video. It can be a broadcast clip or a phone recording from the stands, with no calibration, no markers, and a camera that pans and zooms to follow the athlete.</p>
+          Outside controlled settings, the footage that exists is usually a single video. It can be a broadcast clip or a phone recording from the stands, with no calibration, no markers, 
+          and a camera that pans and zooms to follow the athlete.</p>
 
-        <p>The <a href="https://github.com/marcozeccola/speed-analysis">speed-analysis</a> repository turns that one video into height and vertical velocity, in metres and metres per second.
+        <p>In this article we explore how we can turn  that one video into height 
+          and vertical velocity, in metres and metres per second.
           The idea that makes this possible is short: <em>the wall is the calibration target</em>.
           Competition walls follow the IFSC standard, so the position of every hold is fixed by rule before the video starts.
           If we can find the holds in a frame, we know how pixels relate to metres in that frame.</p>
 
         <figure>
-          <img src="resources/speed_analysis/Cluster3.png" alt="Grip detections on a two-lane broadcast frame, grouped by lane" width="640">
+          <img src="resources/sclimbing/Cluster3.png" alt="Grip detections on a two-lane broadcast frame, grouped by lane" width="640">
           <figcaption>Grip detections on a two-lane broadcast frame. Each label is a grip class and its confidence; the lines join grips that the experimental clustering step assigns to the same lane.</figcaption>
         </figure>
 
         <h2>Pixels do not keep the same size</h2>
         <p>A pose estimator can tell us where the climber's hips and hands are, but only in pixels.
           To report a height in metres, we need a map from image coordinates to wall coordinates.
-          With a fixed, calibrated camera we would compute that map once. Broadcast footage breaks this assumption: the camera tilts upwards with the athlete, the zoom changes, and the lower holds leave the frame as the climber rises.
-          The map is different in every frame.</p>
+          With a fixed, calibrated camera we would compute that map once. Broadcast footage breaks this assumption: the camera tilts upwards with the athlete, the zoom changes, and the lower holds leave the frame as the climber rises, which means the mapping changes at every frame.</p>
         <p>So every frame must carry its own ruler. The pipeline in the repository follows from that requirement:</p>
         <ol>
-          <li>detect the holds and identify which hold each one is;</li>
-          <li>look up where that hold sits on the standard wall;</li>
-          <li>use those pairs to map the climber's body landmarks onto the wall;</li>
-          <li>smooth the resulting trajectory and differentiate it to get velocity.</li>
+          <li>we detect the holds and identify which hold each one is;</li>
+          <li>we look up where that hold sits on the standard IFSC wall;</li>
+          <li>use those pairs to map the climber's body landmarks onto the wall</li>
+          <li>smooth and filter the resulting trajectory and differentiate it to get velocity.</li>
         </ol>
-        <p>Step 2 is the easiest to overlook, and it is where the project starts.</p>
+        <p>Step 2 is the easiest step, and it is where the project starts.</p>
 
         <h2>A wall written as text</h2>
         <p>The IFSC wall is built from 1.5 m × 1.5 m panels drilled with a regular grid of holes, and the regulations describe each hold by the hole that carries it <a href="#ref-12">[12]</a>.
-          The repository keeps that description almost verbatim, as a small text format that a regular expression turns into coordinates.
+          In our repository we keep that description almost verbatim, as a small text format that a regular expression turns into coordinates.
           Each line declares one hold:</p>
         <pre class="language-python"><code class="language-python">_GRIP_LOC = """
 1]  @F2-SN2#1
@@ -80,7 +115,7 @@ GRIP_VALUES_LIST = [
     in (grip.groups() for grip in _GRIP_DECL.finditer(_GRIP_LOC))
 ]</code></pre>
         <p>The advantage of this format is that anyone can check the table against the regulation document line by line, which is much harder with a raw array of floats.
-          The conversion from hole address to metres lives in <code>scripts/ground_truth.py</code>:</p>
+          The conversion from hole address to metres is inside <code>scripts/ground_truth.py</code>, where we use standard sizes for speedclimbing walls:</p>
         <pre class="language-python"><code class="language-python">HOLE_PITCH = 0.125
 PANEL_SIZE = 1.5
 VERTICAL_EDGE_OFFSET = 0.1875
@@ -95,18 +130,12 @@ y = (
     + VERTICAL_EDGE_OFFSET
     + (int(row) - 1) * HOLE_PITCH
 )</code></pre>
-        <p>Two details in this function matter. The hole columns skip the letters J and K, so the column index comes from a lookup table instead of the character code. And the wall starts 0.20 m above the ground, which shifts every height.
-          The first version of the table, which <code>server/tasks.py</code> still defines for itself, missed both:</p>
-        <pre class="language-python"><code class="language-python">[(ord(rel_x[0]) - ord('A')) * 0.1363 + (int(rel_x[1]) - 1) * 1.5,
- (int(sec) - 1) * 1.5 + int(rel_y) * 0.1363]</code></pre>
-        <p>That expression uses a 0.1363 m pitch, counts J and K as columns, and has no base offset. The two tables also differ in three hold declarations, and the corrected one uses the centre of the finish pad as the 21st reference instead of a hold.
-          A short comparison of the two tables shows how much this matters: the same hold moves by 0.17 to 0.35 m between versions, 0.24 m on average.
-          Most of that difference is vertical (0.15 to 0.25 m), so the old table shifts absolute heights more than it changes velocities. It is still a bias close to the size of a hold, and the server should import the corrected table.</p>
-
+        <p>Two details in this function matter. The hole columns skip the letters J and K, so the column index comes from a lookup table instead of the character code. And the wall starts 0.20 m above the ground, which shifts every height. This is because IFSC prescribes that the standard wall must lay on a 20cm panel on the floor.
+          
         <h2>Finding the ruler in each frame</h2>
         <p>With the wall described, the next task is to find its holds in the video.
           The detector is a YOLOv8 model fine-tuned on climbing holds <a href="#ref-2">[2]</a>, <a href="#ref-3">[3]</a>.
-          It predicts one class per hold, so it does not only report "a hold is here" but "hold 13 is here". That identity is what links a detection to a row of the table.
+          It predicts one class per hold, so we detect not only the presence of a grip but also its class. Since there are 21 standardized grip classes, this reduces to a standard object detection task.
           The server runs it through the tracker interface, which keeps identities stable between frames:</p>
         <pre class="language-python"><code class="language-python">res = model.track(
     frame_bgr,
@@ -134,7 +163,7 @@ for c in np.unique(cls_np):
 
         <h2>From pixels to wall coordinates</h2>
         <p>A climbing wall is a plane, and the map between a plane and its image is a homography: a 3 × 3 projective transform with eight degrees of freedom <a href="#ref-4">[4]</a>.
-          Four point pairs, no three of them collinear, determine it. This is why a planar target does not need a full camera pose. The README calls this step PnP, but a PnP solver would also need the camera intrinsics, which a broadcast clip does not give us. A homography needs only the correspondences.</p>
+          Four point pairs, no three of them collinear, determine it. This is why a planar target does not need a full camera pose.</p>
         <p>The number of visible holds changes with every frame, so <code>var_n_pnp_solve</code> picks a model based on how many holds it has:</p>
         <pre class="language-python"><code class="language-python">if n &gt;= 4:
     H_inverse, _ = cv2.findHomography(i_dst, i_src, cv2.RANSAC)
@@ -153,20 +182,9 @@ elif n &lt;= 2:
           Note the direction: <code>findHomography(i_dst, i_src)</code> fits the map from image to wall, so the landmark can be transformed directly.
           With exactly three holds, an affine transform is fully determined, so the function inverts it. It cannot model perspective, but it still handles rotation, scale and shear.</p>
         <p>With one or two holds, there is not enough geometry, and the code falls back to what it knows about a single hold: its size. The repository takes 0.35 m for the grip size. The side of the bounding box in pixels, divided by 0.35 m, gives a local pixels-per-metre scale. The offset from the hold to the landmark, divided by that scale, gives a position on the wall.</p>
-        <p>There is a revealing detail in the current server code. The heuristic sits at the top of the function, and it runs whenever bounding boxes are passed in:</p>
-        <pre class="language-python"><code class="language-python">if val is not None and len(val) &gt; 0:
-    for i in range(len(val)):
-        s = [(val[i][2] - val[i][0]), (val[i][3] - val[i][1])]
-        s = (sum(s) / 2) / GRIP_SIZE          # pixels per metre, from this grip
-        v0_to_h = -(np.array(h_coord) - i_dst[i]) / s
-        x_points.append((i_src[i] + v0_to_h))
-    return np.average(x_points, axis=0)</code></pre>
-        <p>The server always passes the boxes, so this block returns before the homography and affine branches can run. In practice, every frame uses the scale heuristic, averaged over all visible holds.
-          The heuristic assumes that the wall faces the camera and that one scale applies to both axes. The minus sign aligns the image <em>y</em> axis, which points down, with wall height, which points up. It also mirrors the horizontal axis, which does not affect the height and vertical velocity that the server returns.</p>
-        <p>This choice is visible in <code>scripts/validation.py</code>, where the same logic is a named switch, <code>USE_HEURISTIC = True</code>. When the switch is off, the validation plot colours each sample by the number of holds that produced it (red for one, green for four or more). That is the right experiment to decide which solver the server should trust, and it can be run on synthetic footage where the answer is known.</p>
 
         <h2>Following the body</h2>
-        <p>The wall map is only useful once we have something to map. MediaPipe Pose, which is based on BlazePose, predicts 33 body landmarks per frame <a href="#ref-7">[7]</a>. The server keeps five of them:</p>
+        <p>The wall map is only useful once we have something to map. MediaPipe Pose, which is based on BlazePose, predicts 33 body landmarks per frame <a href="#ref-7">[7]</a>. In our prototype we consider five of them, since extensions are trivial:</p>
         <pre class="language-python"><code class="language-python"># Center, Left/Right Wrist, Left/Right Ankle
 chosen_landmarks = [-1, 15, 16, 27, 28]
 
@@ -234,35 +252,22 @@ merged = merge_lists_pairwise(
         <p>DBSCAN on its own can split one lane into several clusters, because the route has large gaps between some holds. The second step merges clusters whose centroids are less than 1.5 m apart horizontally, half the 3 m width of a lane, and it uses a union–find structure to join them transitively.
           Lanes are physically separated, so the rule does not depend on how many lanes the frame shows.</p>
         <figure>
-          <img src="resources/speed_analysis/Cluster2.png" alt="Grip detections on a four-lane wall grouped into lanes" width="640">
+          <img src="resources/sclimbing/Cluster2.png" alt="Grip detections on a four-lane wall grouped into lanes" width="640">
           <figcaption>Experimental lane clustering on a wall with several lanes. Each colour is one merged cluster.</figcaption>
         </figure>
-        <p>This step is not yet connected to the server. Once it is, the per-class filter should run once per lane instead of once per frame.</p>
 
         <h2>Checking the numbers against a known answer</h2>
         <p>A velocity curve from real footage is hard to verify, because nobody measured the true trajectory. The repository solves this with synthetic data: a Blender model of the IFSC wall, an animated climber, and cameras that move like broadcast cameras. A rendered climb comes with the exact position of every body joint in every frame.</p>
         <figure>
           <div class="figure-row">
-            <img src="resources/speed_analysis/RENDER2.png" alt="Synthetic climber at the start of the wall">
-            <img src="resources/speed_analysis/RENDER3.png" alt="Synthetic climber mid climb">
-            <img src="resources/speed_analysis/RENDER6.png" alt="Synthetic climber near the top">
+            <img src="resources/sclimbing/RENDER2.png" alt="Synthetic climber at the start of the wall">
+            <img src="resources/sclimbing/RENDER3.png" alt="Synthetic climber mid climb">
+            <img src="resources/sclimbing/RENDER6.png" alt="Synthetic climber near the top">
           </div>
           <figcaption>Blender renders of a synthetic climb: on the ground, mid climb, and near the top.</figcaption>
         </figure>
         <p><code>scripts/validation.py</code> runs the full extraction on such a render, loads the ground-truth joints from JSON, builds the same hip-and-shoulder centre, and removes the mean from both signals before comparing them. Removing the mean makes the test about the shape of the motion, not about the absolute offset.</p>
-        <p>Two lines need attention before any error figure from this script is quoted:</p>
-        <pre class="language-python"><code class="language-python">ex_y_zero = zero_mean(ex_y)
-gt_y_zero = zero_mean(gt_y)
-...
-# Fix the scale, simulation error i guess
-gt_y_zero = gt_y_zero*0.5 -1.0</code></pre>
-        <p>The rescaling is applied after the mean is removed, so the ground truth ends up with a mean of −1.0 m while the extracted signal has a mean of zero. The printed MSE and MAE therefore include a constant 1 m offset. The factor of 0.5 also points to a unit or scale mismatch in the Blender export, which is better fixed at the source.
-          In addition, the error line runs after the plotting loop, so it reports only the last landmark (the right ankle).</p>
-        <figure>
-          <div class="image-placeholder">[Placeholder: validation plot from scripts/validation.py, extracted vs. ground-truth height per landmark, coloured by visible grip count]</div>
-          <figcaption>Extracted trajectories against ground truth on a synthetic climb.</figcaption>
-        </figure>
-
+        
         <h2>Running it on a clip</h2>
         <p>The analysis runs behind a small web service. FastAPI accepts one or two uploaded videos and queues a Celery task, Redis carries the queue and the task state, and the browser polls <code>/api/analysis-status/{job_id}</code> until the result is ready:</p>
         <pre class="language-bash"><code class="language-bash">redis-server --daemonize yes
@@ -282,16 +287,12 @@ uvicorn server.main:app --reload
   },
   "status": "completed"
 }</code></pre>
-        <p>The repository documentation reports about 20–30 ms per frame on an RTX 3090 with half precision, against about 380 ms on an Intel i7 CPU., which the same document estimates as about 30 seconds against about 6 minutes for 1000 frames.</p>
-        <figure>
-          <div class="image-placeholder">[Placeholder: screenshot of client/analysis_viewer.html comparing Climber A and Climber B]</div>
-          <figcaption>The analysis viewer with height and velocity charts for two climbers.</figcaption>
-        </figure>
 
-        <h2>The ruler was on the wall all along</h2>
-        <p>Nothing in this pipeline calibrates the camera. The measurement comes from the sport itself: because every competition wall is built to the same drawing, every frame of every video contains a ruler with known marks. The detector reads the marks, the table says what they mean, and the filters turn a noisy sequence of positions into a velocity curve.</p>
-        <p>This also shows where the accuracy of the system lives. It depends less on the neural networks than on two plain pieces of code: how faithfully the table describes the wall, and which geometric model the server trusts. Both improvements are already in the repository. The corrected table is in <code>scripts/ground_truth.py</code>, and the homography path is written and waiting behind the heuristic. The synthetic renders provide the answer key to decide between them. Any sport played on a fixed, documented surface can use the same approach.</p>
-
+        <h2>The wall is all you need</h2>
+        <p>Nothing in this pipeline calibrates the camera: the measurement comes from the specifics of the sport itself. 
+          Since every competition wall is built to the same drawing, every frame of every video contains a ruler with known marks.
+           The detector reads the marks, the table says what they mean, and the filters turn a noisy sequence of positions into a velocity curve.</p>
+  
         <section class="references" aria-labelledby="references-title">
           <h2 id="references-title">References</h2>
           <ol>

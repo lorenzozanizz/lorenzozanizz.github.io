@@ -26,6 +26,40 @@
         <time datetime="2026-09-29">29 September 2026</time>
         <h1>Maps that keep neighbours close: Kohonen self-organising maps in C++</h1>
 
+<aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/lorenzozanizz/associative-memory"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      associative-memory ↗
+    </a>
+  </div>
+</aside>
+
         <p>Touch your thumb, then your index finger. The two sensations are processed by neighbouring patches of your somatosensory cortex, and the whole body is laid out across that strip of tissue in a distorted but continuous map. Vision and hearing have maps of the same kind: nearby points on the retina, and nearby frequencies in the cochlea, excite nearby neurons.</p>
         <p>Teuvo Kohonen asked in 1982 what the simplest rule is that can make such maps form by themselves, without a teacher and without a genetic blueprint for every connection. His answer, the self-organising map (SOM), is the third model in this series. After the energy-based <a href="hopfield-networks.html">Hopfield networks</a> and <a href="boltzmann-machines.html">Boltzmann machines</a>, it is interesting because it uses a different principle: units compete for each input, and the winner's neighbours on a grid learn with it. The outcome is a projection of high-dimensional data onto a two-dimensional sheet that keeps similar inputs close together.</p>
         <p>The C++ class is called <code>KonohenMapEigen</code>, a letter swap that has stayed in the repository since the first commit. I will use Kohonen in the text and the real identifiers in the code.</p>
@@ -115,7 +149,6 @@ u(2 * x, 2 * y) = value;</code></pre>
         <p>The SOM update is a Hebbian-style rule: move the weights toward the input that activated the unit. On its own that rule would only average. Competition decides <em>who</em> learns, and the neighbourhood decides <em>who learns with them</em>. Those two additions are enough to turn a collection of prototypes into a map. The same winner-take-all idea reappears in vector quantisation and, in a different form, in the top-<var>k</var> routing of mixture-of-experts layers.</p>
         <p>All three models so far see each input as a static vector. Real signals arrive over time, and a heartbeat or a sentence only makes sense as a sequence. The last post of the series turns to a model that computes with time itself: a large, random, fixed recurrent network whose only trained part is the readout.</p>
 
-        <nav class="series-nav" aria-label="Series navigation"><a href="boltzmann-machines.html">&larr; Boltzmann machines</a><a href="reservoir-computing.html">Reservoir computing &rarr;</a></nav>
 
         <section class="references" aria-labelledby="references-title">
   <h2 id="references-title">References</h2>

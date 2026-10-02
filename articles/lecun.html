@@ -7,6 +7,8 @@
   <title>An unreliable system can still be dangerous · Blog</title>
   <link rel="stylesheet" href="../style.css">
   <script src="../toc.js" defer></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
 </head>
 <body>
   <div class="site">
@@ -14,7 +16,7 @@
 
     <main class="article-page">
       <article>
-        <time datetime="2026-10-01">1 October 2026</time>
+        <time datetime="2026-09-20">20 September 2026</time>
         <h1>An unreliable system can still be dangerous: revisiting LeCun's 2023 position</h1>
 
         <p>
@@ -25,8 +27,8 @@
         </p>
 
         <p>
-          The technical core of the position is easy to state. If each generated token has a small probability <code>e</code> of leaving the set of acceptable continuations,
-          the chance of staying correct decays roughly as <code>(1 − e)<sup>n</sup></code> with sequence length <code>n</code> <a href="#ref-2">[2]</a>.
+          The technical core of the position is easy to state. If each generated token has a small probability \(e\) of leaving the set of acceptable continuations,
+          the chance of staying correct decays roughly as \((1 − e)^n\) with sequence length \(n\) <a href="#ref-2">[2]</a>.
           I think the premise is largely right. My claim is that the conclusion does not follow from it.
         </p>
 
@@ -82,7 +84,8 @@
         <p>
           Current systems are made safe mostly by adding layers: RLHF, filters, classifiers, monitors. Casper et al. review the open problems of RLHF and conclude that it has fundamental limits, among them
           imperfect human feedback and the difficulty of specifying what we actually want <a href="#ref-8">[8]</a>.
-          The deeper trouble is that these layers act on outputs. The model still produces the bad generation internally. We then try to hide it.
+          The deeper trouble is that firstly most runtime safeguards, unlike post-training alignment, act on outputs. The model still produces the bad generation internally, and then then try to hide it.
+          Secondly, even post-training alignment can (and probably will) fail more often as model cannibalism and data poisoning diffuse. 
         </p>
 
         <p>
@@ -90,13 +93,13 @@
           The appeal is that unwanted plans can be rejected during planning. The aim is not to refuse to show a bad generation, but never to consider it.
           That is hard to do with a purely probabilistic next-token model, even after RLHF.
           Work in this direction continues: V-JEPA 2, trained on large amounts of video, is reported to support understanding, prediction and planning for robot control <a href="#ref-9">[9]</a>.
-          I do not claim that JEPA-style systems are safe. I claim that a coherent internal model of the world is the right place to look for safety, not the output filter.
+          I do not claim that JEPA-style systems are safe, only that I find promising the use of coherent internal model of the world when looking for safety, not an output filter.
         </p>
 
         <h2>We cannot read the explanation off the model</h2>
 
         <p>
-          A natural answer is: ask the model to explain itself. Chain-of-thought (CoT) looks like a window into its reasoning. The evidence says the window is dirty.
+          A natural and common answer is: just ask the model to explain itself. Chain-of-thought (CoT) looks like a window into its reasoning. The evidence says the window is dirty.
           Turpin et al. showed that CoT explanations can be systematically unfaithful: models were swayed by biasing features in the prompt and never mentioned them in their explanations <a href="#ref-10">[10]</a>.
           Chen et al. repeated the idea on reasoning models in 2025. They found that models often use a hint without saying so, with disclosure rates that were frequently below 20%, and that outcome-based RL did not fix this <a href="#ref-11">[11]</a>.
         </p>
