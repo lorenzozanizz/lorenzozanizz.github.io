@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Finding the footer of an email with regex features and a small recurrent network, and why the problem has to be fuzzy.">
-  <title>Finding email footers with regexes and a tiny RNN · Blog</title>
+  <title>Recognizing footers in emails with regexes and lightweight NLP models · Blog</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
   <link rel="stylesheet" href="../style.css">
@@ -15,8 +15,8 @@
     <a class="back-link" href="../index.html">&lt; Blog</a>
     <main class="article-page">
       <article>
-        <time datetime="2026-10-01">1 October 2026</time>
-        <h1>Finding the footer: regexes as features, a small RNN as the judge</h1>
+        <time datetime="2023-05-20">20 May 2023</time>
+        <h1>Recognizing footers in emails with regexes and lightweight NLP models</h1>
 
         <p>Anyone who has pulled mail out of an IMAP server knows that the "text" of a message is a polite fiction. You get the body, but also the quoted reply from three messages ago, a mobile signature, a legal disclaimer, a forwarded header, and at the bottom the footer you actually wanted: name, role, company, phone, VAT number. This post is about a small component that finds that footer line by line. It computes a vector of regex-based features for each line, then lets a small TensorFlow RNN decide which lines belong to the footer.</p>
 

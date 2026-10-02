@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Building a small object-oriented discrete Fourier transform in C++, from a text description of a function to a readable spectrum.">
-  <title>An object-oriented Fourier transform in C++ · Blog</title>
+  <title>A C++ guide to object-oriented Fourier transform · Blog</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
   <link rel="stylesheet" href="../style.css">
@@ -26,8 +26,8 @@
     <a class="back-link" href="../index.html">&lt; Blog</a>
     <main class="article-page">
       <article>
-        <time datetime="2026-10-01">1 October 2026</time>
-        <h1>An object-oriented Fourier transform in C++</h1>
+        <time datetime="2022-09-05">5 September 2022</time>
+        <h1>A C++ guide to object-oriented Fourier transform</h1>
 
         <p>The Fourier transform answers a simple question: which frequencies does a function contain? On paper, the answer is an integral over all of time. In a program, you have a finite list of numbers, taken at a fixed rate, over a fixed interval. Every step between the integral and that list changes what you see in the result.</p>
         <p>This guide builds a small C++ program that makes those steps explicit. You describe a function in a short text file. The program samples it, optionally tapers it, transforms it, and prints the strongest frequencies. Each of these steps is its own class. That is the point of the design: when you can change one step and keep the others fixed, the well-known surprises of the discrete transform stop being mysterious and become something you can switch on and off.</p>
