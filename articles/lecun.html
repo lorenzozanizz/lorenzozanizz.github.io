@@ -12,7 +12,7 @@
 </head>
 <body>
   <div class="site">
-    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <a class="back-link" onclick="history.back()">&lt; Blog</a>
 
     <main class="article-page">
       <article>
@@ -84,7 +84,7 @@
         <p>
           Current systems are made safe mostly by adding layers: RLHF, filters, classifiers, monitors. Casper et al. review the open problems of RLHF and conclude that it has fundamental limits, among them
           imperfect human feedback and the difficulty of specifying what we actually want <a href="#ref-8">[8]</a>.
-          The deeper trouble is that firstly most runtime safeguards, unlike post-training alignment, act on outputs. The model still produces the bad generation internally, and then then try to hide it.
+          The deeper trouble is that firstly most runtime safeguards, unlike post-training alignment, act on outputs. The model still produces the bad generation internally, and then try to hide it.
           Secondly, even post-training alignment can (and probably will) fail more often as model cannibalism and data poisoning diffuse. 
         </p>
 

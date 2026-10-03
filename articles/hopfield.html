@@ -22,7 +22,7 @@
 </head>
 <body>
   <div class="site">
-    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <a class="back-link" onclick="history.back()">&lt; Blog</a>
     <main class="article-page">
       <article>
         <time datetime="2026-01-25">25 January 2026</time>
@@ -92,10 +92,10 @@
         \]
       </div>
 
-        <p>Hopfield's key observation was that this rule minimises a quantity he called the energy:</p>
+        <p>Hopfield's key observation was that this rule minimises a quantity he called the energy (in this case, a negative quantity):</p>
         
               <div class="equation">\[
-        H = \frac{1}{2} \sum_i\sum_j w_{ij} s_i s_j
+        H = -\frac{1}{2} \sum_i\sum_j w_{ij} s_i s_j
         \]
       </div>
         <p>If one neuron changes sign, the energy changes by &minus;2&nbsp;|<var>b<sub>i</sub></var>| or not at all. Because the weights are symmetric and the diagonal is zero, the energy can never increase under one-neuron updates, and a finite network must stop at a local minimum. The stored patterns are such minima, provided there are not too many of them. The energy in the code is the same quadratic form:</p>

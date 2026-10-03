@@ -19,10 +19,10 @@
 </head>
 <body>
   <div class="site">
-    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <a class="back-link" onclick="history.back()">&lt; Blog</a>
     <main class="article-page">
       <article>
-        <time datetime="2026-10-01">1 October 2026</time>
+        <time datetime="2026-09-03">3 September 2026</time>
         
         <h1>CUHK-X Competition | A small model for Multimodal Action Recognition</h1>
 
@@ -295,7 +295,7 @@ for i in range(RADAR_LEN):
         <p>By my count, the receptive field of this stack is 221 steps of the 400-step grid, a bit more than half of the clip, which is enough to cover a whole short motion such as a sit-to-stand transition. Each block also contains dropout and a leaky ReLU, which is useful regularization for wearable data from a small number of subjects.</p>
 
         <h3>Radar: pool the points, then attend over time</h3>
-        <p>The radar branch has two stages. The first one summarizes the points of each temporal bin. It resembles the symmetric-function idea of PointNet <a href="#ref-6">[6]</a>, since points are processed independently and then pooled with an order-invariant operation, but it uses a small 1D convolution over the point axis, followed by masked average and max pooling. The mask matters, because most bins have padded slots that must not take part in the max:</p>
+        <p>The radar branch has two stages. The first one summarizes the points of each temporal bin using a small 1D convolution over the point axis, followed by masked average and max pooling. The mask matters, because most bins have padded slots that must not take part in the max:</p>
         <pre class="language-python"><code class="language-python">class CoarsePointPool(nn.Module):
     def __init__(self, in_feats, hidden=32, out_dim=32):
         super().__init__()
