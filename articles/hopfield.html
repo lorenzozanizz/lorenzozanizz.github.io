@@ -126,7 +126,7 @@ StateUtils::perturb_state(deformed_5, /* Noise level */ 0.15);
 UpdateConfig uc = { UpdatePolicy::GroupUpdate, 60 };
 dhn.feed(deformed_5);
 dhn.run(/* Iterations */ 200, uc);</code></pre>
-        <figure><img src="resources/hopfield/Hopefield1.jpeg" alt="Energy and order parameters of the deterministic Hopfield network over 200 iterations"><figcaption>Left: the energy falls from about 1,100 to about 2,300 in the first 40 iterations and then stays flat. Right: time-averaged agreement between the network state and each of the ten stored digits. (Plotted iin GNUPlot)</figcaption></figure>
+        <figure><img src="resources/hopfield/Hopefield1.jpeg" alt="Energy and order parameters of the deterministic Hopfield network over 200 iterations"><figcaption>Left: the energy falls from about -1,100 to about -2,300 in the first 40 iterations and then stays flat. Right: time-averaged agreement between the network state and each of the ten stored digits. (Plotted iin GNUPlot)</figcaption></figure>
         <p>The energy curve shows the descent: most of the work happens in the first 40 steps, which is about 2,400 single-neuron updates, or three passes over the network. After that the state sits in a minimum.</p>
         <p>The order parameters on the right are more interesting than they first look. Each curve is the fraction of pixels on which the network agrees with one stored digit, averaged over time. Mehlig uses the overlap <var>m</var><sub>&mu;</sub> = (1/<var>N</var>) &sum;<sub><var>i</var></sub> <var>s<sub>i</sub></var> <var>x<sub>i</sub></var><sup>(&mu;)</sup> instead; the two are related by agreement = (1 + <var>m</var><sub>&mu;</sub>)/2. All ten curves end between 0.82 and 0.92. The network does not agree with <em>every</em> digit; the digits agree with each other. Most of an MNIST image is background, so any two binarised digits already match on most pixels. That shared structure is the central weakness of the Hebbian rule, and it has a name.</p>
 
@@ -161,7 +161,7 @@ dhn.run(/* Iterations */ 200, uc);</code></pre>
         <h2>Adding noise on purpose</h2>
         <p>Cross-talk has a second effect. Besides the stored patterns, the energy landscape contains <em>spurious</em> minima, such as mixtures of three memories, where a deterministic network can get stuck. The stochastic Hopfield network replaces the sign function with a probability:</p>
               <div class="equation">\[
-         P(s_i =+1) = \frac{1}{1+\exp{(2-\beta b_i)}}
+         P(s_i =+1) = \frac{1}{1+\exp{(-2\beta b_i)}}
         \]
       </div>
         

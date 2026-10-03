@@ -47,7 +47,7 @@
         </figure>
 
         <h2>Starting from the EXR</h2>
-        <p>We will study the required passages to map a raw .EXR file generate with a single Blender compositing pass into a realistic depth footage frame. 
+        <p>We will study the required passages to map a raw .EXR file generated with a single Blender compositing pass into a realistic depth footage frame. 
           We will focus our analysis on a single frame, and then we will compare the end result for the entire animation with a real footage from the target dataset. 
         </p>
         <p>The supplied frame is a 640 × 480 OpenEXR with a single <code>Image.V</code> channel. Reading it as float32 preserves the scene distances. 
@@ -64,7 +64,7 @@ valid = np.isfinite(depth) & (depth >= 3.0) & (depth <= 8.5)</code></pre>
            The interesting part is the underlying distance field: it tells us where a person separates from the room, and where that separation might become less certain in a measured image.</p>
 
         <h2>Where real silhouettes get untidy</h2>
-        <p>At a sharp change in depth, neighboring pixels may belong to very different surfaces. Literature sources report that in real-word depth footage, and indeed in the target dataset itself, this can cause discontinuities and noise at borders corresponding to sharp changes in altitude. 
+        <p>At a sharp change in depth, neighboring pixels may belong to very different surfaces. Literature sources report that in real-word depth map footage, and indeed in the target dataset itself, this can cause discontinuities and noise at borders corresponding to sharp changes in altitude. 
           We detect these jumps using horizontal and vertical differences, then we find a small band around each edge. A distance transform lets every pixel in that band inherit the strength and direction of its nearest discontinuity.</p>
         <pre class="language-python"><code class="language-python">gx[:, :-1] = depth[:, 1:] - depth[:, :-1]
 gy[:-1, :] = depth[1:, :] - depth[:-1, :]
@@ -105,34 +105,33 @@ result = Image.alpha_composite(base, overlay)</code></pre>
       <img src="resources/depth_sensor/real.gif" alt="Real depth sensor" style="width: 50%; min-width: 0;">
       <img src="resources/depth_sensor/modelled.gif" alt="Modelled depth sensor" style="width: 50%; min-width: 0;">
       </div>
-      <p> We can see that the domain augmentation is qualitatively reproduces some visual characteristics of the lens border distortion and the JET color pallette specified by the CUHK-X dataset. 
+      <p> We can see that the generated shots qualitatively reproduce some visual characteristics of the lens border distortion and the JET color pallette specified by the CUHK-X dataset. 
         The noisy effect in the glass panel in our synthetic simulation is expected, as mirrors and reflective surfaces can cause disturbances in depth sensors and multiple recordings in the original dataset exhibit this behaviour.  </p>
       
       <section class="references" aria-labelledby="references-title">
         <h2 id="references-title">References</h2>
+
         <ol>
+
           <li id="ref-1">
             <a href="https://www.mixamo.com/#/" target="_blank" rel="noopener noreferrer">
               Adobe Mixamo - Squatting animation and rigged model
             </a>
           </li>
-        </ol>
-        <ol>
+  
           <li id="ref-1">
             <a href="https://sketchfab.com/3d-models/white-modern-living-room-afb8cb0cbee1488caf61471ef14041e9" target="_blank" rel="noopener noreferrer">
               Sketchfab - CC Attribution Living room model for the scene
             </a>
           </li>
-        </ol>
 
-        <ol>
           <li id="ref-1">
             <a href="https://www.kaggle.com/competitions/cuhk-x-competition-small-model-track/overview" target="_blank" rel="noopener noreferrer">
               CUHK-X Competition Small Model Track
             </a>
           </li>
-        </ol>
-        <ol>
+        
+
   <li id="ref-1">
     <a href="https://openaccess.thecvf.com/content/CVPR2021/html/Chugunov_Mask-ToF_Learning_Microlens_Masks_for_Flying_Pixel_Correction_in_Time-of-Flight_CVPR_2021_paper.html" target="_blank" rel="noopener noreferrer">
       Chugunov, Ilya; Baek, Seung-Hwan; Fu, Qiang; Heidrich, Wolfgang; Heide, Felix (2021). “Mask-ToF: Learning Microlens Masks for Flying Pixel Correction in Time-of-Flight Imaging.” CVPR 2021.
