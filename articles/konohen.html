@@ -8,6 +8,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/themes/prism-tomorrow.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/plugins/toolbar/prism-toolbar.min.css">
   <link rel="stylesheet" href="../style.css">
+      <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
     <script src="../toc.js" defer></script>
   <style>
     figure { margin: 1.6rem 0; }
@@ -20,7 +22,7 @@
 </head>
 <body>
   <div class="site">
-    <a class="back-link" href="../index.html">&lt; Blog</a>
+    <a class="back-link" onclick="history.back()">&lt; Blog</a>
     <main class="article-page">
       <article>
         <time datetime="2026-01-17">17 January 2026</time>
@@ -66,14 +68,18 @@
 
         <h2>Two spaces and one winner</h2>
         <p>A SOM connects two spaces. The input space holds the data, here 28&nbsp;&times;&nbsp;28 MNIST digits as vectors in &#8477;<sup>784</sup>. The output space is a lattice of units, here a 10&nbsp;&times;&nbsp;10 grid. Each unit <var>r</var> has a weight vector <var>w</var><sub><var>r</var></sub> in the input space, a prototype of the inputs that it represents. For an input <var>x</var>, the <em>best-matching unit</em> is the one whose prototype is closest:</p>
-        <span class="eq"><var>r</var><sub>0</sub> = argmin<sub><var>r</var></sub> &Vert;<var>x</var> &minus; <var>w</var><sub><var>r</var></sub>&Vert;</span>
+        
+        <div class="equation">\[
+        r_0=\arg \min ||x-w_r||
+        \]
+      </div>
         <p>The weights are stored as the columns of one matrix, so the search for a single input is one Eigen expression:</p>
         <pre class="language-cpp"><code class="language-cpp">unsigned int map(const Eigen::VectorXd&amp; x) const {
     unsigned int winner = 0;
     (weight_vectors.colwise() - x).colwise().norm().minCoeff(&amp;winner);
     return winner;
 }</code></pre>
-        <p>For a batch of inputs, the code avoids computing each difference by expanding the squared distance, &Vert;<var>x</var> &minus; <var>w</var>&Vert;<sup>2</sup> = &Vert;<var>w</var>&Vert;<sup>2</sup> + &Vert;<var>x</var>&Vert;<sup>2</sup> &minus; 2<var>w</var><sup>T</sup><var>x</var>. The expensive part becomes a single matrix product between all prototypes and all inputs, which a BLAS-style kernel handles far better than a loop of subtractions:</p>
+        <p>For a batch of inputs, the code avoids computing each difference by expanding the squared distance, \( ||x-w||^2 = ||w||^2 + ||x||^2 -2w^Tx\). The expensive part becomes a single matrix product between all prototypes and all inputs, which a BLAS-style kernel handles far better than a loop of subtractions:</p>
         <pre class="language-cpp"><code class="language-cpp">Eigen::RowVectorXd w_norms = weight_vectors.colwise().squaredNorm();
 Eigen::RowVectorXd x_norms = batch.colwise().squaredNorm();
 
@@ -86,7 +92,11 @@ for (int b = 0; b &lt; B; ++b)
 
         <h2>The neighbours learn with the winner</h2>
         <p>If only the winner learned, the SOM would be online <var>k</var>-means: every prototype would move toward its own inputs, and the grid positions would mean nothing. Kohonen's rule also moves the units that are near the winner <em>on the grid</em>, with a strength that decreases with lattice distance:</p>
-        <span class="eq">&delta;<var>w</var><sub><var>r</var></sub> = &eta; &Lambda;(<var>r</var>, <var>r</var><sub>0</sub>) (<var>x</var> &minus; <var>w</var><sub><var>r</var></sub>), &nbsp;&nbsp; &Lambda;(<var>r</var>, <var>r</var><sub>0</sub>) = exp(&minus;&vert;<var>r</var> &minus; <var>r</var><sub>0</sub>&vert;<sup>2</sup> / 2&sigma;<sup>2</sup>)</span>
+
+        <div class="equation">\[
+            \delta w_r = \eta \cdot \Lambda(r, r_0)\cdot (x-w_r) \text{ where } \Lambda(r, r_0) = \exp(-|r-r_0|^2 / 2\sigma^2)
+          \]
+      </div>
         <p>This cooperation is what builds the map. Two inputs that activate neighbouring units pull those units, and their neighbours, toward similar positions in the input space. Over many updates, units that are close on the grid end up with prototypes that are close in the data. The training loop in <code>KonohenMapEigen::train</code> is a direct translation:</p>
         <pre class="language-cpp"><code class="language-cpp">for (const auto&amp; input : data.get_data()) {
     // find best matching unit
@@ -108,7 +118,9 @@ for (int b = 0; b &lt; B; ++b)
         <p>A wide neighbourhood produces a global ordering, because the whole map moves together. A narrow one lets each unit specialise. Kohonen's practice is to start wide and shrink the width over time, and <code>evolve_sigma</code> provides four schedules. The exponential one is:</p>
         <pre class="language-cpp"><code class="language-cpp">case exponential: this-&gt;sigma = sigma_0 * std::exp(-static_cast&lt;double&gt;(iteration_step) / tau);
     break;</code></pre>
-        <p>The example uses &sigma;<sub>0</sub>&nbsp;=&nbsp;3, &tau;&nbsp;=&nbsp;10 and a constant learning rate &eta;&nbsp;=&nbsp;0.1 over 100 passes through 4,000 digits. The width stays at 3 until pass 20. After that the schedule uses the absolute pass number, so at pass 21 &sigma; drops at once to 3&nbsp;e<sup>&minus;2.1</sup>&nbsp;&asymp;&nbsp;0.37, and a direct neighbour of the winner then receives a weight of about 0.02. The training thus has two clear phases: 20 passes of ordering with a 5&nbsp;&times;&nbsp;5 neighbourhood, then 80 passes of what is almost pure competitive learning that refines each prototype in place.</p>
+        <p>The example uses \( \sigma_0=3, \tau=10 \) and a constant learning rate \(\eta=0.1\) over 100 passes through 4,000 digits. The width stays at 3 until pass 20. After that the schedule uses the absolute pass number, so at pass 21 \(\sigma\) drops at once to \(3e^{2.1} \approx 0.37\), and a direct neighbour of the winner then receives a weight of about 0.02. The training thus has two clear phases: 20 passes of ordering with a 5&nbsp;&times;&nbsp;5 neighbourhood, then 80 passes of what is almost pure competitive learning that refines each prototype in place.</p>
+
+
 
         <h2>Reading the map</h2>
         <p>The SOM is trained without labels, but we can use the labels afterwards to see what it learned. <code>MajorityMappingEigen</code> sends every training digit to its best-matching unit and counts the labels that each unit receives. A unit gets a label only if one digit makes up at least 60&nbsp;% of its hits; otherwise it stays unlabelled.</p>
@@ -123,7 +135,7 @@ for (int b = 0; b &lt; B; ++b)
     }
     return -1;
 }</code></pre>
-        <figure><img src="resources/associative_memory/gnuplot_res.png" alt="Majority labels of the 10 by 10 SOM units trained on MNIST" width="640" height="384"><figcaption>Majority label of each unit of the 10&nbsp;&times;&nbsp;10 map. Colour 0 (black) marks units without a 60&nbsp;% majority; colours 1&ndash;10 are the digits 0&ndash;9.</figcaption></figure>
+        <figure><img src="resources/konohen/gnuplot_res.png" alt="Majority labels of the 10 by 10 SOM units trained on MNIST" width="640" height="384"><figcaption>Majority label of each unit of the 10&nbsp;&times;&nbsp;10 map. Colour 0 (black) marks units without a 60&nbsp;% majority; colours 1&ndash;10 are the digits 0&ndash;9.</figcaption></figure>
         <p>Units with the same label form connected patches, which is the topology preservation that the neighbourhood rule was designed to produce. The black units are as informative as the coloured ones. Several of them sit between two patches, where the prototype is a blend of two digits and no class reaches the threshold.</p>
         <p>The labels are borrowed information. The map itself can also show its clusters, because the distance between neighbouring prototypes is small inside a cluster and large across a border. The U-matrix of Ultsch and Siemon makes this visible: for a <var>W</var>&nbsp;&times;&nbsp;<var>H</var> map it builds a (2<var>W</var>&minus;1)&nbsp;&times;&nbsp;(2<var>H</var>&minus;1) image in which the cells between units hold the distance between their prototypes and each unit cell holds the mean of its surroundings. <code>UClusteringEigen::compute</code> fills it like this:</p>
         <pre class="language-cpp"><code class="language-cpp">if (x != width - 1) {
@@ -140,9 +152,8 @@ if ((x != width - 1) &amp;&amp; (y != heigth - 1)) {
 }
 double value = neighb_mean(2 * x, 2 * y);
 u(2 * x, 2 * y) = value;</code></pre>
-        <figure><div class="image-placeholder">U-matrix of the trained map</div><figcaption>U-matrix of the 10&nbsp;&times;&nbsp;10 map. Bright ridges are large distances between neighbouring prototypes and mark cluster borders.</figcaption></figure>
         <p>The repository offers two more views: a full 100&nbsp;&times;&nbsp;100 matrix of distances between all prototypes, and <var>k</var>-means with ten clusters run on the prototypes instead of on the raw images. Because the prototypes are already an ordered summary of the data, <var>k</var>-means on 100 vectors is cheap, and its clusters can be drawn back onto the grid.</p>
-        <figure><img src="resources/associative_memory/cluster.png" alt="K-means clusters of the SOM prototypes drawn on the grid" width="640" height="384"><figcaption><var>k</var>-means with ten clusters on the 100 unit prototypes, drawn on the map.</figcaption></figure>
+        <figure><img src="resources/konohen/cluster.png" alt="K-means clusters of the SOM prototypes drawn on the grid" width="640" height="384"><figcaption><var>k</var>-means with ten clusters on the 100 unit prototypes, drawn on the map.</figcaption></figure>
         <p>Compare this picture with the majority labels. <var>k</var>-means knows only prototype distances, but its clusters also form mostly connected regions on the grid. This is the practical value of a SOM: the grid is a coordinate system in which ordinary tools produce readable results.</p>
 
         <h2>Competition as a learning principle</h2>
