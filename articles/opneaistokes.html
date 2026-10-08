@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A short thinkpiece on why a Lean check of an AI proof does not prove that the natural language argument is correct.">
+  <title>Lean, natural language and the limits of AI proofs · Blog</title>
+  <link rel="stylesheet" href="../style.css">
+      <script src="../toc.js" defer></script>
+
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" href="../index.html">&lt; Blog</a>
+
+    <main class="article-page">
+      <article>
+        <time datetime="2026-10-08">8 October 2026</time>
+        <h1>OpenAI just solved Navier-Stokes. Or did they?</h1>
+
+        <p>
+          On 6 October 2026, Bastounis, Circelli and Hansen posted a paper titled <em>Navier–Stokes lost in translation</em> [1].
+          The paper studies OpenAI's announced proof of finite-time blow-up for the Navier–Stokes equations [2]. OpenAI also
+          published Lean 4 code for its results [3].
+        </p>
+
+        <p>
+          The paper sets its scope in one short sentence. The authors write: "we do not make claims about the correctness of OpenAI's NL proof" [1].
+          The authors do not say that the proof is wrong. They say that a Lean check cannot show that the text is right.
+          This article explains why that gap matters.
+        </p>
+
+        <h2>Two kinds of autoformalisation</h2>
+
+        <p>
+          The paper separates two tasks [1]. In the first task, a theorem is already stated correctly in Lean. An AI system then
+          turns the natural language proof into Lean code. The task succeeds when Lean accepts the code without gaps or extra axioms.
+        </p>
+
+        <p>
+          In the second task, an AI system translates a whole mathematical text into Lean. Every definition, statement and proof
+          must keep its original meaning. The authors say this second task is much harder. They also argue that resolving
+          ambiguity in mathematical text is harder than the Halting problem [1].
+        </p>
+
+        <p>
+          The first task cannot show that the original proof is correct. The AI can change the meaning of the proof to make Lean accept it [1].
+          The paper gives a clear example. A user gave a chatbot an incorrect proof of a true inequality. The chatbot returned a
+          correct Lean proof that used a different argument. The Lean check passed, but it said nothing about the wrong informal proof [1].
+        </p>
+
+        <h2>What the OpenAI case shows</h2>
+
+        <p>
+          The paper compares the natural language estimates with the Lean code in detail [1]. In one case, the text states an
+          estimate with four extra derivatives [2]. The Lean code uses five extra derivatives instead. The Lean result is therefore
+          weaker than the claim in the text [1]. It still compiles and proves a valid statement, but it is not the same statement.
+        </p>
+
+        <p>
+          The difference comes from the proof method. The text uses a sum that converges because of a power of three. The Lean code
+          uses a sum with a power of four, and this costs one extra derivative [1]. The paper also reports a second case. There, the
+          Lean code uses a different argument and proves a different bound for a pressure term [1].
+        </p>
+
+        <h2>Lean outside the reasoning</h2>
+
+        <p>
+          Lean is an interactive theorem prover [4]. It gives a strong answer to one question: does this code compile? It gives no
+          direct answer to a second question: does this code say what the natural language text says? The paper shows that the
+          second question is the hard one [1].
+        </p>
+
+        <p>
+          In many current workflows, Lean works as a separate check. An AI system writes an informal proof. Another step turns it
+          into Lean. This setup has two weak points. The first is a formalisation error. A small change in a definition or a constant
+          can change the theorem. The second is a shortcut. The AI can change the meaning until Lean accepts the code [1]. A check that
+          sits outside the reasoning cannot see these changes.
+        </p>
+
+        <p>
+          One option is to put formal reasoning inside the model. The model would write each step in a formal language. This would
+          remove the gap between text and code. It also has costs. Formal proofs are long. A short step in mathematics can need many
+          lines of code. The model would spend much of its effort on formal detail. It would also lose the flexible reasoning of
+          natural language, such as analogy, rough estimates and short cuts.
+        </p>
+
+        <p>
+          A formal proof also starts from a formal statement. If that statement is wrong, the proof is correct for the wrong claim.
+          The translation problem stays, even inside a fully formal system.
+        </p>
+
+        <p>
+          So the two approaches have a trade-off. A separate Lean check is safe only when the translation is faithful. Full formal
+          reasoning is precise, but it is too long and too rigid for most work. Neither approach solves the problem alone.
+        </p>
+
+        <h2>AI proofs can guide, but humans must verify</h2>
+
+        <p>
+          AI proofs are already useful. They can suggest a route, a lemma or a key estimate. A researcher can then check the idea
+          and fill in the details. In this role, the AI saves time and gives direction.
+        </p>
+
+        <p>
+          They do not yet replace human checking. The OpenAI case shows why. The difference between four and five derivatives is
+          one number in a long argument. The parts of the source that the paper discusses run to page 123 [2]. A reader must trace
+          the proof to find the mismatch [1]. Models can lose track of details over long texts. A small error can sit in one line,
+          far from the main idea.
+        </p>
+
+        <p>
+          Lean can catch some errors, but only when the statement is faithful. Until the translation is checked, a human must read
+          the argument.
+        </p>
+
+        <h2>Conclusion</h2>
+
+        <p>
+          The paper makes one clear point. A Lean check tests the code. It does not test the meaning of the text [1]. This matters
+          for AI proofs, because the text can be long and the translation can change meaning. Formal reasoning inside models is a
+          possible path, but it is not yet practical for long proofs. For now, AI proofs help people find routes and ideas.
+          People must still read and check the argument. Errors often hide in the gap between a text and its formal copy.
+        </p>
+
+        <h2>References</h2>
+
+        <ol>
+          <li>
+            A. Bastounis, F. Circelli, A. C. Hansen, "Navier–Stokes lost in translation – Why Lean verification of AI autoformalisation
+            does not guarantee correct natural language proofs", arXiv:2610.08144 (2026).
+            <a href="https://arxiv.org/abs/2610.08144" target="_blank" rel="noopener noreferrer">https://arxiv.org/abs/2610.08144</a>
+          </li>
+          <li>
+            OpenAI, "Finite time blowup for Navier–Stokes" (announced natural language proof, as cited in [1]).
+            <a href="https://cdn.openai.com/pdf/32d9f210-8b73-45e0-91bc-82a30aef8a9a/navier-stokes.pdf" target="_blank" rel="noopener noreferrer">https://cdn.openai.com/pdf/32d9f210-8b73-45e0-91bc-82a30aef8a9a/navier-stokes.pdf</a>
+          </li>
+          <li>
+            OpenAI, NavierStokesAndEuler, Lean 4 formalisation repository (as cited in [1]).
+            <a href="https://github.com/openai/NavierStokesAndEuler" target="_blank" rel="noopener noreferrer">https://github.com/openai/NavierStokesAndEuler</a>
+          </li>
+          <li>
+            "Theorem Proving in Lean 4".
+            <a href="https://lean-lang.org/theorem_proving_in_lean4/" target="_blank" rel="noopener noreferrer">https://lean-lang.org/theorem_proving_in_lean4/</a>
+          </li>
+        </ol>
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+</body>
+</html>
