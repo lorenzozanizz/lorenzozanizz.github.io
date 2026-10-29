@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="IR-synth is a Blender add-on that turns a temperature field into physically motivated synthetic thermal images. This article covers the problem, the state of the art, and the architecture and workflow of the add-on.">
+  <title>Synthetic thermography in Blender: building IR-synth · Blog</title>
+  <link rel="stylesheet" href="../style.css">
+    <script src="../toc.js" defer></script>
+
+</head>
+<body>
+  <div class="site">
+    <a class="back-link" onclick="history.back()">&lt; Blog</a>
+
+    <main class="article-page">
+      <article>
+        <time datetime="2026-10-29">29 October 2026</time>
+        <h1>Synthetic thermography in Blender: building IR-synth</h1>
+
+
+<aside aria-label="GitHub repository"
+  style="display:flex; align-items:center; gap:16px; max-width:620px;
+         margin:2rem 0; padding:18px 20px; border:1px solid #dedee2;
+         border-radius:18px; background:#3e3e3e;
+         box-shadow:0 5px 16px rgba(30,30,35,.07);">
+
+  <div style="display:grid; place-items:center; width:52px; height:52px;
+              flex:none; border-radius:15px; background:#fff;
+              box-shadow:0 2px 7px rgba(30,30,35,.08);">
+    <img src="resources/github_logo.svg" alt=""
+         width="30" height="30"
+         style="display:block; width:30px; height:30px; object-fit:contain;">
+  </div>
+
+  <div style="min-width:0;">
+    <div style="margin-bottom:4px; color:#ffffff; font-size:.72rem;
+                font-weight:700; letter-spacing:.08em; text-transform:uppercase;">
+      On GitHub
+    </div>
+
+    <p style="margin:0 0 10px; color:#ececec; line-height:1.4;">
+      This article discusses and uses code from a repository.
+    </p>
+
+    <a href="https://github.com/lorenzozanizz/ir-synth"
+       target="_blank" rel="noopener noreferrer"
+       style="display:inline-block; padding:6px 11px; border-radius:8px;
+              background:#303038; color:#fff; font-size:.88rem;
+              font-weight:600; text-decoration:none;">
+      ir-synth ↗
+    </a>
+  </div>
+</aside>
+
+        <p>
+          Thermal cameras see heat instead of light. They work in the dark, through light smoke, and they show things that
+          a normal camera cannot show. That makes them useful for detection, inspection, and navigation. It also makes
+          training data hard to get. A thermal camera, a real scene, and a lot of careful labeling are all needed, and the
+          result only fits one sensor in one set of conditions. One recent paper describes collecting a thermal dataset with
+          a drone camera as a large effort: 6,664 images over 20 scenes, and the authors call it the first dataset of its
+          kind for thermal novel view synthesis <a href="#ref-1">[1]</a>.
+        </p>
+
+        <p>
+          IR-synth is my attempt at a different route. It is a Blender add-on that produces synthetic thermal images from
+          a normal 3D scene <a href="#ref-14">[14]</a>. In the Blender sidebar the add-on is called Thermography, and
+          internally it is named <code>bl_thermal</code>. You give each object a temperature and an emissivity. The add-on turns them
+          into a signal that a thermal sensor would record, and Blender renders it. This article explains why the problem
+          is harder than it looks, what other people do about it, and how IR-synth is built.
+        </p>
+
+        <p>
+          The project is at version 0.9.0 and it targets Blender 4.5 or later. Some parts are finished and some are
+          placeholders. I will say clearly which is which.
+        </p>
+
+        <h2>The problem: Blender renders light, not heat</h2>
+
+        <p>
+          A thermal camera does not measure temperature directly. It measures the radiated power that reaches the
+          detector inside a limited band of wavelengths, for example the long wave infrared band around 10 micrometers.
+          The camera software then converts that power into a number. Two facts make this more than a simple color mapping.
+        </p>
+
+        <p>
+          First, a real surface radiates less than an ideal black body at the same temperature. The fraction it does
+          radiate is its emissivity. Second, whatever is not emitted is mostly reflected. A shiny metal pot at 20 °C can
+          look hot or cold in a thermal image, depending on what it reflects. The apparent signal is a mix of the surface
+          itself and its surroundings.
+        </p>
+
+        <p>
+          Blender is built for visible light. Its renderer takes light sources, material colors, and three color channels.
+          Temperature is not a quantity in a Blender scene. To get a thermal image, you have to bring temperature in,
+          convert it to band radiance, and let the renderer handle the reflections, while keeping the renderer from
+          "improving" the pixel values with tone mapping or denoising.
+        </p>
+
+        <p>
+          Many projects already use Blender for thermal data, and most take a practical shortcut. One drone detection
+          pipeline turns generated backgrounds into grayscale and adds a light emission component to the drone models
+          <a href="#ref-2">[2]</a>. The authors note that the background generator they used was designed for visible
+          images, not for accurate long wave infrared simulation. Another project uses real thermal backgrounds and builds a
+          shader node network by hand, using the Fresnel node to change the apparent emissivity with the viewing angle
+          <a href="#ref-3">[3]</a>. The node setup is tuned by eye against real images.
+        </p>
+
+        <p>
+          These methods work for many detection tasks. But the images carry no temperature. A pixel is a gray level that
+          someone chose, and it cannot be converted back to Kelvin. This also makes it hard to vary the scene in a
+          controlled way, for example by changing only the ambient temperature.
+        </p>
+
+        <h2>State of the art</h2>
+
+        <p>
+          I looked at three families of methods. They give different answers to the same question.
+        </p>
+
+        <h3>Physics-based signature simulators</h3>
+
+        <p>
+          The oldest family comes from defense work. MuSES, from ThermoAnalytics, solves the heat balance for every facet
+          of a scene and then predicts the radiance that a sensor would see. The vendor describes its renderer as using
+          multi-bounce ray tracing, and its CoTherm tool automates the variation of input parameters to produce large
+          image sets for machine learning <a href="#ref-4">[4]</a>. DIRSIG follows the same chain: a thermodynamic model
+          gives temperatures, and a ray tracer carries the radiation from the source to the target and to the sensor.
+          A validation study of DIRSIG found that most of the error comes from the two big parts, the temperature predictor
+          and the radiative transfer model, and it measured an average radiance error of about 14 percent on one real
+          scene <a href="#ref-5">[5]</a>.
+        </p>
+
+        <p>
+          This family is the most accurate, and it also shows what is hard. Good thermal images need good temperatures.
+          These tools are specialized, often closed, and aimed at expert users.
+        </p>
+
+        <h3>Blender as a radiometric layer</h3>
+
+        <p>
+          A second family uses Blender as the renderer and puts a separate thermal model in front of it. A group at
+          Politecnico di Milano builds thermal images of spacecraft and asteroids this way. A finite volume thermal model
+          gives the temperatures, Blender renders the scene from the camera position, and then thermal camera models are
+          applied <a href="#ref-6">[6]</a>. A 2026 conference talk from the University of Antwerp describes the same idea
+          for thermography experiments: finite element or analytical models provide the temperature field, and Blender
+          handles geometry, material optics, camera configuration, and band integration. The case studies include angular
+          emissivity on curved objects, imaging through infrared windows, and reflection-dominated metallic scenes
+          <a href="#ref-7">[7]</a>.
+        </p>
+
+        <p>
+          IR-synth belongs to this family. The main difference is the goal. These projects are research tools built for
+          one experiment each. I wanted a general add-on that lives inside Blender's interface, can be driven from scripts,
+          and treats the temperature field as something you edit and randomize.
+        </p>
+
+        <h3>Learned translation from RGB</h3>
+
+        <p>
+          The third family skips simulation. It trains a GAN or a diffusion model to turn an RGB image into a thermal
+          image. This can use the large amount of RGB data that already exists. A benchmark on an aerial RGB-thermal
+          dataset found that paired GANs gave the best results, but that the translation still needs improvement before it
+          can be a reliable source of thermal training data <a href="#ref-8">[8]</a>. Newer work adds physics to the model.
+          The PID model splits a thermal image into temperature, emissivity, and texture, and uses physical constraints
+          during training <a href="#ref-9">[9]</a>. TherA, from CVPR 2026, conditions a diffusion model on a thermal-aware
+          embedding, so that users can control the time of day, the weather, and the state of objects
+          <a href="#ref-10">[10]</a>.
+        </p>
+
+        <p>
+          This approach does help. In one study on vehicle detection from drones, synthetic infrared images from a
+          diffusion model raised the detection score from 50.8 to 60.1 mAP on one target dataset. The authors also report
+          that a gap to real infrared data remains, and that traits you cannot see in RGB, such as engine heat, make the
+          mapping hard to learn <a href="#ref-11">[11]</a>.
+        </p>
+
+        <h3>Where this leaves a gap</h3>
+
+        <p>
+          Learned methods are fast and flexible, but they give no ground truth temperature and they can invent heat that
+          is not there. Full physics simulators are accurate, but they are heavy and hard to reach. Between them there is
+          room for a tool that is open, scriptable, and sits inside a general 3D program. Its temperatures should be
+          explicit numbers that the user controls. IR-synth tries to fill this gap. It does not try to replace a
+          validated signature simulator.
+        </p>
+
+        <h2>Our approach</h2>
+
+        <p>
+          The central idea is to split the problem into two parts that do not depend on each other.
+        </p>
+
+        <pre><code>1. temperature field     where is it hot? (Kelvin, per vertex)
+2. radiometry            what does a sensor record for that temperature?</code></pre>
+
+        <p>
+          The first part is geometry work. It happens once, in NumPy, and the result is written into the mesh as an
+          attribute named <code>thermal_temperature_k</code>. A second attribute, <code>thermal_emissivity</code>, holds the
+          emissivity. Both are one float per vertex. The second part is a shader. It reads the two attributes, applies a
+          transfer function, and lets Cycles do the rest. Because the shader is made of ordinary node math, it runs on the
+          GPU and stays editable in Blender.
+        </p>
+
+        <p>
+          This split has a useful consequence. The temperature field can come from anywhere: painted by hand, computed from a
+          formula, or produced by an outside solver. The renderer does not care. It only needs the attribute.
+        </p>
+
+        <p>
+          A second decision shapes the whole add-on: the pixel value must stay a measurement. The raw output is a linear
+          signal that can be inverted back to a temperature. False color exists only for looking at the scene in the
+          viewport. I rejected normalizing against the scene minimum and maximum, because it would weld a palette range
+          into the material, make every frame scale to itself, and destroy the link between pixel and temperature.
+        </p>
+
+        <p>
+          One more honest note. IR-synth does not solve heat transfer. The temperature field is an initial state. There are
+          field operations such as smoothing and contact diffusion, but the code describes contact diffusion as a static
+          approximation of an already diffused state, not a simulation. Time evolution is a planned feature.
+        </p>
+
+        <figure>
+          <img src="https://raw.githubusercontent.com/lorenzozanizz/ir-synth/main/resources/teapot.png" alt="Blender viewport showing a teapot pouring into a cup on a saucer, colored by baked temperature from 292 to 310 Kelvin, with the Thermography sidebar open" style="max-width:100%; height:auto;">
+          <figcaption>The add-on in Blender. Baked temperatures are shown in false color, and the sidebar shows contact diffusion operations and the baking panel.</figcaption>
+        </figure>
+
+        <h2>The physics in short</h2>
+
+        <p>
+          A transfer function maps a surface temperature in Kelvin to a sensor signal. All of them approximate Planck's
+          law for a narrow band around one center wavelength. IR-synth implements three:
+        </p>
+
+        <pre><code>Wien              S(T) = R * exp(-B / T) + O
+Rayleigh-Jeans    S(T) = R * T + O
+RBFO              S(T) = R / (exp(B / T) - F) + O</code></pre>
+
+        <p>
+          Here <code>B = h c / (λ k)</code> for the band center wavelength λ, about 1439 K for 10 micrometers. <code>R</code> absorbs the
+          constants, the band width, and the detector gain, and <code>O</code> is the dark signal offset. RBFO is the form
+          that real long wave cameras use to publish their calibration. The FLIR AX5 documentation gives its constants this
+          way <a href="#ref-13">[13]</a>. It keeps the full exponential, so it stays accurate over a wider range than Wien.
+          Wien is better at low temperatures or short wavelengths, and Rayleigh-Jeans at the opposite end. The
+          theory behind these approximations and the notation follow the standard textbook on thermography errors
+          <a href="#ref-12">[12]</a>.
+        </p>
+
+        <p>
+          Every transfer can also run backward. Given a signal, it returns the temperature. This is what makes the raw
+          output a measurement, and it is used to label the legend of the false color display. Two transfers, Stefan-Boltzmann
+          and a band-integrated Planck lookup table, are declared in the code but not implemented yet.
+        </p>
+
+        <p>
+          Emissivity enters after the transfer, in signal space and not in temperature space:
+        </p>
+
+        <pre><code>S_apparent = eps * S(T_surface) + (1 - eps) * S(T_reflected)</code></pre>
+
+        <p>
+          Some inputs can break these formulas. RBFO with <code>F &gt; 1</code> has a denominator that reaches zero at
+          <code>T = B / ln(F)</code>, and the add-on computes this limit so it can report a bad scene before it renders.
+          Temperatures are clamped to at least 1 K, and the exponent is capped at 80, so bad input cannot produce
+          infinities or NaNs in an image.
+        </p>
+
+        <h2>Architecture</h2>
+
+        <p>
+          The add-on is about nine thousand lines of Python, and it is split by one rule: the simulation code never imports
+          <code>bpy</code>.
+        </p>
+
+        <pre><code>ext/
+  thermal_core/   pure Python + NumPy, no bpy
+                  specs, config, field, pipeline, operations, radiometry
+  hooks/          hook registry for outside code, no bpy
+  ui/             property groups, panels, spec resolution (bpy)
+  operators/      bake, visualize, operation stack, environment (bpy)
+  shaders/        node graph builders, thermal world, render settings (bpy)</code></pre>
+
+        <p>
+          A test checks this rule. It starts a fresh Python process with no Blender, imports the core, and runs a bake with
+          a source and an operation. If someone adds a <code>bpy</code> import to the core, the test fails. This is what
+          allows continuous integration to run the physics without Blender, and it is what allows a script to build and
+          change a thermal setup without a running Blender session.
+        </p>
+
+        <h3>The conversion boundary</h3>
+
+        <p>
+          Blender state and the core meet in one place. The file <code>ui/resolution.py</code> reads live properties and
+          produces frozen dataclasses. For every object it resolves a spec by walking a chain: the object, then each
+          collection that contains it, then the scene default. If an object inherits from two collections whose specs
+          disagree, the resolver raises an error and does not pick one silently.
+        </p>
+
+        <p>
+          Geometry crosses the boundary through a class called <code>MeshSampler</code>. It copies vertex positions in world
+          space, the edge list, and optional vertex group weights into a <code>MeshSample</code> made of NumPy arrays. World
+          space is used because operations that read two objects need a shared frame. After evaluation, an
+          <code>AttributeWriter</code> converts the float64 results to float32 and writes them back to the mesh.
+        </p>
+
+        <h3>Specs, registries, and twins</h3>
+
+        <p>
+          Every choice a user can make is a small frozen dataclass: <code>UniformTempSpec</code>,
+          <code>GradientTempSpec</code>, <code>WeightPaintedEmissivitySpec</code>, <code>ClampOp</code>, and so on. Each one
+          validates itself and can be written to JSON with its class name and a schema version, then read back. Behavior is
+          attached through registries keyed by enums. To add a temperature strategy, you write the dataclass and one
+          registered function:
+        </p>
+
+        <pre><code class="language-python">@BakeStrategyRegistry.register(GradientTempSpec)
+def _evaluate_gradient(spec, sample):
+    point_a = np.asarray(spec.point_a, dtype=np.float64)
+    axis = np.asarray(spec.point_b, dtype=np.float64) - point_a
+    axis_length_sq = float(np.dot(axis, axis))
+    # t = 0 at point_a, t = 1 at point_b, clamped beyond the endpoints
+    t = np.clip((sample.positions - point_a) @ axis / axis_length_sq, 0.0, 1.0)
+    return spec.value_a_k + t * (spec.value_b_k - spec.value_a_k)</code></pre>
+
+        <p>
+          (The real function also checks for a degenerate axis.) Callers never branch on the spec type. They call
+          <code>evaluate()</code> and the registry finds the function.
+        </p>
+
+        <p>
+          Most registries have a twin on the Blender side. The numeric registries in the core (<code>BakeStrategyRegistry</code>,
+          <code>OpRegistry</code>, <code>TransferRegistry</code>) are mirrored by registries that know how to draw a panel and
+          build a spec from properties (<code>InitStrategyRegistry</code>, <code>OperationRegistry</code>) or how to build a
+          node graph (<code>TransferNodeRegistry</code>, <code>ShaderRegistry</code>). The transfer functions are the best
+          example. The same formula exists twice, as NumPy code for validation and legends, and as a chain of Math nodes for
+          rendering. The module documentation says plainly that the two must agree. For RBFO, the node chain is:
+        </p>
+
+        <pre><code>max(T, 1)  →  B / T  →  min(., 80)  →  exp  →  - F  →  max(., 1e-6)  →  R / .  →  + O</code></pre>
+
+        <p>
+          This is the same guarded computation that the NumPy version performs. A shared design for both is the main
+          defense against a render that silently drifts from the numbers.
+        </p>
+
+        <h3>Failure handling</h3>
+
+        <p>
+          The pipeline does not raise on the first problem. It collects <code>Failure</code> objects with a reason (invalid
+          spec, not implemented, missing geometry, operation failed) and continues. A broken operation is skipped and the
+          others still run. At the end, the bake operator reports one line, for example how many objects were baked and how
+          many were skipped for each reason. In a scene with hundreds of objects this is much more useful than a stack trace.
+        </p>
+
+        <h2>Workflow of the extension</h2>
+
+        <p>
+          In Blender, the add-on appears as a Thermography tab in the 3D viewport sidebar, plus tabs in the Properties
+          editor for scenes and collections. A normal session goes like this.
+        </p>
+
+        <pre><code>Thermal Environment  →  per-object / per-collection specs  →  operation stack
+        →  bake  →  shading settings  →  build thermal material  →  render</code></pre>
+
+        <p>
+          <strong>1. Describe the environment.</strong> In Scene Properties, under Thermal Environment, you add factors.
+          Ambient Temperature is the background of the scene. Default Initialization is the temperature strategy used by
+          objects that inherit. A Humidity factor exists in the type list but is not implemented.
+        </p>
+
+        <p>
+          <strong>2. Set temperatures and emissivity.</strong> The Object panel offers Inherit, Uniform, Ambient, Gradient,
+          and Weight Painted for temperature. A gradient is defined by two points in world space. You can copy each point
+          from the 3D cursor, and an overlay in the viewport draws the two points and an arrow toward the hot end. Weight
+          painted takes a vertex group and remaps its weights onto a temperature range, with a linear or smooth falloff.
+          Emissivity works the same way with Inherit, Uniform, and Weight Painted, and the scene has a default value.
+          Collections have their own tab with the same controls.
+        </p>
+
+        <p>
+          <strong>3. Shape the field with operations.</strong> The operation stack runs after all sources are evaluated, in
+          order. Order matters, because you may want to smooth an object before it diffuses onto another. There are three
+          operations:
+        </p>
+
+        <ul>
+          <li><strong>Clamp</strong> keeps values inside a Kelvin range.</li>
+          <li><strong>Smooth</strong> runs Laplacian smoothing over the mesh edges. Each pass moves a vertex toward the mean of its neighbors by a given factor.</li>
+          <li><strong>Contact diffusion</strong> warms receiver objects near source objects. Each receiver vertex finds its nearest source vertex, and blends toward it with a weight that falls from the chosen strength at zero distance to zero at the radius.</li>
+        </ul>
+
+        <p>
+          Each operation has a scope: all objects, one collection, or a list of objects. Operations can be muted,
+          duplicated, and reordered. Contact diffusion takes a snapshot of the sources before it writes anything, so the
+          result does not depend on the order in which objects are visited. This is what produces the warm ring on the
+          saucer in the figure above.
+        </p>
+
+        <p>
+          <strong>4. Bake.</strong> One button bakes the temperature and the emissivity together, so the two attributes
+          cannot go out of sync. The panel shows how many mesh objects are ready before you press it. The flow inside is:
+        </p>
+
+        <pre><code>bpy scene
+  → ConfigBuilder          resolve specs, build SceneThermalConfig
+  → MeshSampler            geometry → MeshSample (NumPy)
+  → BakingPipeline         evaluate sources, then fold the operation stack
+  → FieldSet               one Kelvin array per object
+  → AttributeWriter        float32 mesh attributes</code></pre>
+
+        <p>
+          <strong>5. Choose how to see it.</strong> The Thermography panel has the shading path, the transfer function
+          and its parameters, the emissivity, and the output mode. The button Build Thermal Material creates one shared
+          material, assigns it to every baked mesh, and you look at the result in Material Preview or Rendered mode. A color
+          bar can be drawn in the viewport, and a Fit Span button sets the display range from the baked data.
+        </p>
+
+        <h3>The three shading paths</h3>
+
+        <p>
+          Shading types are chosen from a registry, and a type with no implementation says so instead of falling back to
+          something else. Three are implemented today.
+        </p>
+
+        <ul>
+          <li><strong>Temperature Shader.</strong> Shows the baked Kelvin values directly, with no radiometry. It is a diagnostic view of what the bake produced.</li>
+          <li><strong>Node Surrogate Reflection.</strong> Applies the transfer to the surface and to a constant reflected temperature, and mixes them by emissivity with Math nodes. There is no light transport, so it is fast and the environment is a single number.</li>
+          <li><strong>Ray Node Shader.</strong> The surface emits <code>eps * S(T)</code> and reflects with albedo <code>1 - eps</code>, through a mix of diffuse and glossy lobes controlled by a specular fraction and a roughness. Cycles then carries the emission of other objects into the reflections. The add-on also builds a thermal World whose background has the signal of the ambient temperature, so empty space reflects it.</li>
+        </ul>
+
+        <p>
+          The ray path needs care, because a normal Blender render changes pixel values to look good. When you build the
+          material in this mode, the add-on sets Cycles as the engine, the Standard view transform, no look, exposure 0,
+          gamma 1, no sample clamping, no glossy filter, no denoising, and at least eight bounces. In a closed space the
+          missing energy is about <code>(1 - eps)^(bounces + 1)</code>, so a low emissivity needs more bounces. The add-on
+          also warns when a visible light is left on, because it adds radiance that does not belong in a thermal image, and
+          when a mesh is not baked, because other surfaces would reflect its ordinary material.
+        </p>
+
+        <p>
+          The detector offset <code>O</code> is left out of the ray-traced path on purpose. Without it, the signal is linear in
+          radiance, so Cycles can scale and sum it over bounces correctly. The offset is a detector term and should be added
+          once after the render. The panel tells the user that pixels hold <code>S - O</code>, and that the temperature inversion
+          works on that value. For the same reason, false color is blocked in this mode, since other surfaces would reflect
+          the palette.
+        </p>
+
+        <h2>Hooks: connecting the add-on to a data pipeline</h2>
+
+        <p>
+          A dataset needs thousands of variations, so the add-on has to be driven from outside. The hook registry is the
+          designed entry point. A hook is a function that receives the object produced by one stage of the bake and a
+          context, and returns either a replacement of the same type or <code>None</code>. There are four hook points:
+        </p>
+
+        <pre><code>CONFIG_BUILT       SceneThermalConfig, after it is built   randomization lives here
+SAMPLES_BUILT      the MeshSample dictionary
+FIELDS_EVALUATED   FieldSet, before writing                an outside solver can replace values here
+BAKE_FINISHED      the outcome dictionary                  label files, logging</code></pre>
+
+        <p>
+          Hooks run by ascending priority and then by registration order. In strict mode, a hook that raises or returns the
+          wrong type stops the bake. In non-strict mode, the failure is recorded and the others continue. The context carries
+          a seed, and <code>context.rng(stream)</code> returns a NumPy generator seeded from the seed and a stream number, so
+          each hook gets its own reproducible random numbers. A small sketch of a hook that jitters uniform temperatures:
+        </p>
+
+        <pre><code class="language-python">hooks = HookRegistry()
+
+@hooks.register(HookPoint.CONFIG_BUILT, name="jitter_temperatures")
+def jitter(config, context):
+    rng = context.rng(stream=1)
+    sources = {}
+    for key, spec in config.sources.items():
+        if isinstance(spec, UniformTempSpec):
+            spec = UniformTempSpec(value_k=spec.value_k + rng.normal(0.0, 1.5))
+        sources[key] = spec
+    return config.with_sources(sources)</code></pre>
+
+        <p>
+          I want to be exact about the status. The registry, its contracts, and its tests exist. At the time of writing,
+          the bake operators do not call the registry yet, so this wiring is still to be done. The same applies to the
+          planned integrations with BlenderProc and RenderSynth: the folders exist in the repository, and they are empty.
+          The reason for the early design is that the config is plain serializable data and the core needs no Blender, so
+          the pieces a hook needs are already in place.
+        </p>
+
+        <h2>Testing and documentation</h2>
+
+        <p>
+          The tests run under pytest with a stub of the <code>bpy</code> module, so the registries, the spec resolution
+          and the hook registry can be checked on any machine. There are about fifty tests, most of them on the hook
+          registry. Continuous integration also runs pylint with a minimum score, and builds the documentation with MkDocs.
+          The documentation has a page on the physics, and an embedded three.js viewer.
+        </p>
+
+        <h2>Limits and what comes next</h2>
+
+        <p>
+          A list of what is missing is part of an honest description of the project.
+        </p>
+
+        <ul>
+          <li><strong>No heat solver.</strong> Temperatures are authored or imported. The time evolution module is an empty file, and a dynamic simulation type is declared but unused.</li>
+          <li><strong>Unfinished radiometry.</strong> The Stefan-Boltzmann and the band-integrated Planck transfers are declared, not evaluated.</li>
+          <li><strong>Unfinished shading paths.</strong> The OSL, custom ray, NumPy, and pure emittance paths are listed as types, and the OSL file is empty.</li>
+          <li><strong>No sensor model.</strong> Spectral response, noise, and camera palettes are stubs. The current output is an ideal signal.</li>
+          <li><strong>Simple emissivity.</strong> It is one scalar per vertex, so it does not change with the viewing angle, which the Antwerp work shows can matter on curved objects <a href="#ref-7">[7]</a>. Atmosphere and distance are not modeled either.</li>
+          <li><strong>No validation against real data yet.</strong> The formulas follow published sources, but the repository has no comparison with images from a real camera. The DIRSIG study is a good reminder that this step decides how far the numbers can be trusted <a href="#ref-5">[5]</a>.</li>
+          <li><strong>Rough edges in the code.</strong> Vertex group weights are read in a Python loop, and the thermal material replaces slot 0 on each mesh without keeping the old one. Both are marked as to-do items.</li>
+        </ul>
+
+        <p>
+          The next steps follow from this list: connect the hooks to the bake, add the sensor model, and then compare
+          renders with real thermograms. After that, the BlenderProc and RenderSynth integrations should make it possible to
+          put thermal generation into existing procedural rendering pipelines.
+        </p>
+
+        <h2>Conclusion</h2>
+
+        <p>
+          Blender can render thermal images if temperature is made a first-class quantity and the renderer is stopped from
+          changing the values. IR-synth does this in three steps. It bakes a Kelvin field onto the meshes, converts it with
+          a transfer function that is written twice (NumPy and nodes), and renders reflections with Cycles under settings that
+          keep pixels linear. The structure matters as much as the physics: a core with no Blender dependency, specs that
+          are plain data, registries for every choice, and failures that are reported instead of thrown. The code is
+          open, and contributions are welcome at the repository <a href="#ref-14">[14]</a>.
+        </p>
+
+        <h2>References</h2>
+
+        <ul>
+
+          <li>
+            <a id="ref-1" href="https://arxiv.org/pdf/2409.08042" target="_blank" rel="noopener noreferrer">
+              Thermal3D-GS: Physics-induced 3D Gaussians for Thermal Infrared Novel-view Synthesis (arXiv:2409.08042)
+            </a>
+          </li>
+          <li>
+            <a id="ref-2" href="https://arxiv.org/pdf/2608.17799" target="_blank" rel="noopener noreferrer">
+              Training with synthetic data for drone detection in thermal imagery (arXiv:2608.17799)
+            </a>
+          </li>
+          <li>
+            <a id="ref-3" href="https://arxiv.org/pdf/2507.06797" target="_blank" rel="noopener noreferrer">
+              Unlocking Thermal Aerial Imaging: Synthetic Enhancement of UAV Datasets (arXiv:2507.06797)
+            </a>
+          </li>
+          <li>
+            <a id="ref-4" href="https://www.thermoanalytics.com/muses-features-capabilities/" target="_blank" rel="noopener noreferrer">
+              ThermoAnalytics | MuSES: Advanced Features and Capabilities
+            </a>
+          </li>
+          <li>
+            <a id="ref-5" href="https://core.ac.uk/works/7957301" target="_blank" rel="noopener noreferrer">
+              Validation of DIRSIG, an infrared synthetic scene generation model
+            </a>
+          </li>
+          <li>
+            <a id="ref-6" href="https://re.public.polimi.it/bitstream/11311/1251883/1/QUIRM02-23.pdf" target="_blank" rel="noopener noreferrer">
+              Thermal image generation tool for spacecraft relative navigation, Politecnico di Milano (QUIRM02-23)
+            </a>
+          </li>
+          <li>
+            <a id="ref-7" href="https://qirt2026.unina.it/event/1/contributions/119/" target="_blank" rel="noopener noreferrer">
+              Physics-Based Rendering in Blender for the Simulation of Thermography Experiments, QIRT 2026
+            </a>
+          </li>
+          <li>
+            <a id="ref-8" href="https://arxiv.org/pdf/2403.08997" target="_blank" rel="noopener noreferrer">
+              Caltech Aerial RGB-Thermal Dataset in the Wild (arXiv:2403.08997)
+            </a>
+          </li>
+          <li>
+            <a id="ref-9" href="https://arxiv.org/abs/2407.09299" target="_blank" rel="noopener noreferrer">
+              PID: Physics-Informed Diffusion Model for Infrared Image Generation (arXiv:2407.09299)
+            </a>
+          </li>
+          <li>
+            <a id="ref-10" href="https://arxiv.org/abs/2602.19430" target="_blank" rel="noopener noreferrer">
+              TherA: Thermal-Aware Visual-Language Prompting for Controllable RGB-to-Thermal Infrared Translation (arXiv:2602.19430)
+            </a>
+          </li>
+          <li>
+            <a id="ref-11" href="https://arxiv.org/abs/2609.02556" target="_blank" rel="noopener noreferrer">
+              RGB-to-IR image translation for infrared vehicle detection in unseen UAV domains (arXiv:2609.02556)
+            </a>
+          </li>
+          <li>
+            <span id="ref-12">
+              "Infrared Thermography: Errors and Uncertainty", Waldemar Minkina and Sebastian Dudzik, John Wiley &amp; Sons (2009)
+            </span>
+          </li>
+          <li>
+            <a id="ref-13" href="https://device.report/m/bb0fb3a133c0e28de013f89093d51f0629ef0e14866976b11b9d92bc19177b85.pdf" target="_blank" rel="noopener noreferrer">
+              GenICam ICD, FLIR AX5 Camera
+            </a>
+          </li>
+          <li>
+            <a id="ref-14" href="https://github.com/lorenzozanizz/ir-synth" target="_blank" rel="noopener noreferrer">
+              lorenzozanizz/ir-synth, with documentation at lorenzozanizz.github.io/ir-synth
+            </a>
+          </li>
+        </ul>
+      </article>
+    </main>
+
+    <footer>© Lorenzo Zani</footer>
+  </div>
+</body>
+</html>
